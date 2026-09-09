@@ -512,12 +512,14 @@
     <div class="panel">
       <div class="card">
         <h2>시험지 정보</h2>
-        <label class="field-label">제목</label>
+        <label class="field-label">제목 (모든 페이지 상단에 표시)</label>
         <input type="text" class="field-input" id="examTitleInput" placeholder="예: 2025학년도 1학기 중간고사">
-        <label class="field-label">과목 / 시간</label>
-        <input type="text" class="field-input" id="examSubjectInput" placeholder="예: 수학 · 50분">
+        <label class="field-label">과목 영역 (굵게 중앙 표시)</label>
+        <input type="text" class="field-input" id="examSubjectInput" placeholder="예: 수학 영역">
+        <label class="field-label">교시 (선택, 박스로 표시)</label>
+        <input type="text" class="field-input" id="examPeriodInput" placeholder="예: 제1교시">
         <label class="field-label">안내문 (선택)</label>
-        <input type="text" class="field-input" id="examNoteInput" placeholder="예: 성명: ________  수험번호: ________">
+        <input type="text" class="field-input" id="examNoteInput" placeholder="예: 다음 물음에 답하시오.">
       </div>
 
       <div class="card">
@@ -695,6 +697,7 @@
 
   const examTitleInput = document.getElementById('examTitleInput');
   const examSubjectInput = document.getElementById('examSubjectInput');
+  const examPeriodInput = document.getElementById('examPeriodInput');
   const examNoteInput = document.getElementById('examNoteInput');
 
   const dropzone = document.getElementById('dropzone');
@@ -751,11 +754,13 @@
   /* ---------- 시험지 정보(제목 블록) ---------- */
   examTitleInput.value = localStorage.getItem('exam_title') || '';
   examSubjectInput.value = localStorage.getItem('exam_subject') || '';
+  examPeriodInput.value = localStorage.getItem('exam_period') || '';
   examNoteInput.value = localStorage.getItem('exam_note') || '';
-  [examTitleInput, examSubjectInput, examNoteInput].forEach((el) => {
+  [examTitleInput, examSubjectInput, examPeriodInput, examNoteInput].forEach((el) => {
     el.addEventListener('change', () => {
       localStorage.setItem('exam_title', examTitleInput.value.trim());
       localStorage.setItem('exam_subject', examSubjectInput.value.trim());
+      localStorage.setItem('exam_period', examPeriodInput.value.trim());
       localStorage.setItem('exam_note', examNoteInput.value.trim());
     });
   });
@@ -1811,40 +1816,121 @@
     }
     const {
       Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType,
-      SectionType, AlignmentType, TabStopType
+      SectionType, AlignmentType, TabStopType, Header, Footer, PageNumber
     } = window.docx;
 
-    const PAGE_MARGIN = { top: 1000, bottom: 1000, left: 1000, right: 1000 };
+    const PAGE_MARGIN = { top: 1400, bottom: 1000, left: 1000, right: 1000 };
     const COLUMN_GAP = 567; // twips (~1cm)
     const COLUMN_WIDTH = Math.round((11906 - PAGE_MARGIN.left - PAGE_MARGIN.right - COLUMN_GAP) / 2);
+    const CONTENT_WIDTH = 11906 - PAGE_MARGIN.left - PAGE_MARGIN.right;
+
+    const thinBorder = { style: BorderStyle.SINGLE, size: 4, color: '000000' };
+
+    /* 모든 페이지 상단에 반복되는 머리글: 제목(좌) + 쪽번호(우), 그 아래 굵은 과목 영역명 */
+    function buildHeader() {
+      const children = [];
+      children.push(new Paragraph({
+        tabStops: [{ type: TabStopType.RIGHT, position: CONTENT_WIDTH }],
+        children: [
+          new TextRun({ text: examInfo.title || '', font: FONT_BODY, size: 22 }),
+          new TextRun({ text: '\t' }),
+          new TextRun({ children: [PageNumber.CURRENT], font: FONT_BODY, size: 36, bold: true })
+        ]
+      }));
+      if (examInfo.subject) {
+        children.push(new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 120, after: 60 },
+          children: [new TextRun({ text: examInfo.subject, bold: true, size: 32, font: FONT_NUMBER })]
+        }));
+      }
+      return new Header({ children: children });
+    }
+
+    /* 모든 페이지 하단에 반복되는 꼬리말: 현재쪽/전체쪽 상자 */
+    function buildFooter() {
+      const pageBox = new Table({
+        alignment: AlignmentType.CENTER,
+        width: { size: 12, type: WidthType.PERCENTAGE },
+        rows: [new TableRow({
+          children: [new TableCell({
+            borders: { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder },
+            margins: { top: 40, bottom: 40, left: 100, right: 100 },
+            children: [new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new TextRun({ children: [PageNumber.CURRENT], font: FONT_BODY, size: 18 }),
+                new TextRun({ text: ' / ', font: FONT_BODY, size: 18 }),
+                new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONT_BODY, size: 18 })
+              ]
+            })]
+          })]
+        })]
+      });
+      return new Footer({ children: [pageBox] });
+    }
+
+    const infoCell = (text, opts) => {
+      const o = opts || {};
+      const cellOpts = {
+        borders: { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder },
+        margins: { top: 60, bottom: 60, left: 80, right: 80 },
+        width: { size: o.width || 10, type: WidthType.PERCENTAGE },
+        children: [new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: text || '', bold: !!o.bold, font: FONT_BODY, size: 20 })]
+        })]
+      };
+      if (o.shading) cellOpts.shading = { type: ShadingType.CLEAR, color: 'auto', fill: 'F2F2F2' };
+      return new TableCell(cellOpts);
+    };
 
     const titleChildren = [];
-    if (examInfo.title) {
-      titleChildren.push(new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 60 },
-        children: [new TextRun({ text: examInfo.title, bold: true, size: 40, font: FONT_NUMBER })]
-      }));
+
+    if (examInfo.period) {
+      const periodBox = new Table({
+        width: { size: 18, type: WidthType.PERCENTAGE },
+        rows: [new TableRow({
+          children: [new TableCell({
+            borders: { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder },
+            margins: { top: 80, bottom: 80, left: 160, right: 160 },
+            children: [new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: examInfo.period, bold: true, size: 24, font: FONT_BODY })]
+            })]
+          })]
+        })]
+      });
+      titleChildren.push(periodBox);
+      titleChildren.push(new Paragraph({ text: '', spacing: { after: 160 } }));
     }
-    if (examInfo.subject) {
-      titleChildren.push(new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 120 },
-        children: [new TextRun({ text: examInfo.subject, bold: false, size: 24, font: FONT_BODY })]
-      }));
-    }
-    if (examInfo.note) {
-      titleChildren.push(new Paragraph({
-        alignment: AlignmentType.RIGHT,
-        spacing: { after: 60 },
-        children: [new TextRun({ text: examInfo.note, size: 20, font: FONT_BODY })]
-      }));
-    }
+
+    titleChildren.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [new TableRow({
+        children: [
+          infoCell('성명', { bold: true, shading: true, width: 10 }),
+          infoCell('', { width: 26 }),
+          infoCell('휴대번호', { bold: true, shading: true, width: 14 }),
+          infoCell('', { width: 10 }),
+          infoCell('-', { width: 4 }),
+          infoCell('', { width: 12 }),
+          infoCell('-', { width: 4 }),
+          infoCell('', { width: 12 })
+        ]
+      })]
+    }));
     titleChildren.push(new Paragraph({
       border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 4 } },
       spacing: { after: 200 },
       children: []
     }));
+    if (examInfo.note) {
+      titleChildren.push(new Paragraph({
+        spacing: { after: 160 },
+        children: [new TextRun({ text: examInfo.note, size: 20, font: FONT_BODY })]
+      }));
+    }
 
     const questionChildren = [];
 
@@ -1956,6 +2042,8 @@
       sections: [
         {
           properties: { page: { size: { width: 11906, height: 16838 }, margin: PAGE_MARGIN } },
+          headers: { default: buildHeader() },
+          footers: { default: buildFooter() },
           children: titleChildren
         },
         {
@@ -1964,6 +2052,8 @@
             type: SectionType.CONTINUOUS,
             column: { count: 2, space: COLUMN_GAP }
           },
+          headers: { default: buildHeader() },
+          footers: { default: buildFooter() },
           children: questionChildren
         }
       ]
@@ -1982,6 +2072,7 @@
       const examInfo = {
         title: examTitleInput.value.trim(),
         subject: examSubjectInput.value.trim(),
+        period: examPeriodInput.value.trim(),
         note: examNoteInput.value.trim()
       };
       const blob = await buildDocx(extractedQuestions, examInfo);
@@ -2264,6 +2355,7 @@
     extractedQuestions = item.questions;
     examTitleInput.value = item.examTitle || '';
     examSubjectInput.value = item.examSubject || '';
+    examPeriodInput.value = item.examPeriod || '';
     examNoteInput.value = item.examNote || '';
     renderPreview(item.questions);
     downloadBtn.disabled = false;
@@ -2284,6 +2376,7 @@
     firestoreDb.collection('exam_batches').add({
       examTitle: examTitleInput.value.trim(),
       examSubject: examSubjectInput.value.trim(),
+      examPeriod: examPeriodInput.value.trim(),
       examNote: examNoteInput.value.trim(),
       questions: extractedQuestions,
       questionCount: extractedQuestions.length,
