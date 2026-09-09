@@ -9,6 +9,9 @@
 
 <script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore-compat.js"></script>
 <script>
   window.MathJax = {
     tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] },
@@ -291,6 +294,61 @@
   .modal .modal-actions { display: flex; gap: 10px; }
   .modal .modal-actions .btn { flex: 1; margin-top: 0; }
   .modal-close { background: #eef1f4; color: var(--text); }
+  .modal select {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 16px;
+    background: #fafafa;
+    margin: 6px 0 14px;
+  }
+  .modal textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #fafafa;
+    margin: 6px 0 14px;
+    min-height: 120px;
+    resize: vertical;
+  }
+  .modal .help-text { font-size: 12px; color: var(--sub); line-height: 1.5; margin-bottom: 14px; }
+  .modal .help-text a { color: var(--accent); }
+
+  .bank-status { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 10px; }
+  .bank-status-text { font-size: 12px; color: var(--sub); }
+  .bank-status-text.connected { color: var(--success); font-weight: 600; }
+  .bank-status-text.error { color: var(--danger); }
+  .bank-link-btn { background: none; border: none; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 0; }
+  .bank-search-row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .bank-search-row input { flex: 1; margin-bottom: 0; }
+  .bank-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+  .bank-item {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .bank-item-info { min-width: 0; }
+  .bank-item-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bank-item-meta { font-size: 12px; color: var(--sub); margin-top: 2px; }
+  .bank-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .bank-item-actions button {
+    border: none;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .bank-load-btn { background: #eef6ff; color: var(--accent-dark); }
+  .bank-delete-btn { background: #fdeceb; color: var(--danger); }
 </style>
 </head>
 <body>
@@ -298,7 +356,7 @@
   <h1>My Test Paper AI Converter</h1>
   <div class="header-right">
     <span class="usage-pill" id="usagePill">오늘 분석 0회</span>
-    <button class="settings-btn" id="settingsBtn">⚙️ Gemini API Key 설정</button>
+    <button class="settings-btn" id="settingsBtn">⚙️ AI 설정</button>
   </div>
 </header>
 
@@ -347,8 +405,24 @@
     </div>
 
     <div class="panel">
+      <div class="card">
+        <h2>문제은행</h2>
+        <div class="bank-status">
+          <span class="bank-status-text" id="bankStatusText">Firebase 연결 안 됨</span>
+          <button class="bank-link-btn" id="bankSetupBtn">Firebase 설정</button>
+        </div>
+        <div class="bank-search-row">
+          <input type="text" class="field-input" id="bankSearchInput" placeholder="제목·과목으로 검색">
+          <button class="btn btn-secondary" id="bankSearchBtn" style="flex:0 0 auto;">검색</button>
+        </div>
+        <div class="bank-list" id="bankList">
+          <div class="empty-hint">Firebase를 연결하면 저장된 시험지 목록이 여기 표시됩니다.</div>
+        </div>
+      </div>
+
       <div class="result-toolbar">
         <button class="btn btn-download" id="downloadBtn" disabled>MS Word (.docx) 다운로드</button>
+        <button class="btn btn-secondary" id="saveBankBtn" disabled style="flex:0 0 auto;">문제은행에 저장</button>
         <span class="count" id="resultCount"></span>
       </div>
       <div id="previewArea">
@@ -360,15 +434,48 @@
 
 <div class="modal-overlay" id="settingsModal">
   <div class="modal">
-    <h3>Gemini API 설정</h3>
-    <label>API Key</label>
-    <input type="password" id="apiKeyInput" placeholder="Gemini API Key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <label>모델 (오류 발생 시 변경)</label>
-    <input type="text" id="modelInput" placeholder="gemini-flash-lite-latest" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <h3>AI 설정</h3>
+    <label>AI 제공자</label>
+    <select id="providerSelect">
+      <option value="gemini">Google Gemini</option>
+      <option value="claude">Anthropic Claude</option>
+    </select>
+
+    <div id="geminiFields">
+      <label>Gemini API Key</label>
+      <input type="password" id="apiKeyInput" placeholder="Gemini API Key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <label>Gemini 모델 (오류 발생 시 변경)</label>
+      <input type="text" id="modelInput" placeholder="gemini-flash-lite-latest" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </div>
+    <div id="claudeFields" style="display:none;">
+      <label>Claude API Key</label>
+      <input type="password" id="claudeApiKeyInput" placeholder="Claude API Key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <label>Claude 모델 (오류 발생 시 변경)</label>
+      <input type="text" id="claudeModelInput" placeholder="claude-haiku-4-5-20251001" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </div>
+
     <div class="usage-line" id="modalUsageLine">오늘 분석 0회</div>
     <div class="modal-actions">
       <button class="btn modal-close" id="closeModalBtn">닫기</button>
       <button class="btn btn-primary" id="saveModalBtn" style="margin-top:0;">저장</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="bankModal">
+  <div class="modal">
+    <h3>Firebase 문제은행 설정</h3>
+    <div class="help-text">
+      Firebase 콘솔(console.firebase.google.com)에서 무료 프로젝트를 만들고<br>
+      "프로젝트 설정 → 일반 → 내 앱 → SDK 설정 및 구성"에서 나오는<br>
+      config 객체(중괄호 { } 포함)를 그대로 붙여넣으세요.<br><br>
+      Firestore와 Authentication(익명 로그인 사용 설정)도 콘솔에서 미리 켜두어야 합니다.
+    </div>
+    <label>Firebase Config (JSON)</label>
+    <textarea id="firebaseConfigInput" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...", ...}'></textarea>
+    <div class="modal-actions">
+      <button class="btn modal-close" id="closeBankModalBtn">닫기</button>
+      <button class="btn btn-primary" id="saveBankModalBtn" style="margin-top:0;">연결</button>
     </div>
   </div>
 </div>
@@ -379,10 +486,26 @@
   const settingsModal = document.getElementById('settingsModal');
   const closeModalBtn = document.getElementById('closeModalBtn');
   const saveModalBtn = document.getElementById('saveModalBtn');
+  const providerSelect = document.getElementById('providerSelect');
+  const geminiFields = document.getElementById('geminiFields');
+  const claudeFields = document.getElementById('claudeFields');
   const apiKeyInput = document.getElementById('apiKeyInput');
   const modelInput = document.getElementById('modelInput');
+  const claudeApiKeyInput = document.getElementById('claudeApiKeyInput');
+  const claudeModelInput = document.getElementById('claudeModelInput');
   const usagePill = document.getElementById('usagePill');
   const modalUsageLine = document.getElementById('modalUsageLine');
+
+  const bankStatusText = document.getElementById('bankStatusText');
+  const bankSetupBtn = document.getElementById('bankSetupBtn');
+  const bankModal = document.getElementById('bankModal');
+  const closeBankModalBtn = document.getElementById('closeBankModalBtn');
+  const saveBankModalBtn = document.getElementById('saveBankModalBtn');
+  const firebaseConfigInput = document.getElementById('firebaseConfigInput');
+  const bankSearchInput = document.getElementById('bankSearchInput');
+  const bankSearchBtn = document.getElementById('bankSearchBtn');
+  const bankList = document.getElementById('bankList');
+  const saveBankBtn = document.getElementById('saveBankBtn');
 
   const examTitleInput = document.getElementById('examTitleInput');
   const examSubjectInput = document.getElementById('examSubjectInput');
@@ -413,10 +536,22 @@
 
   const DEFAULT_MODEL = 'gemini-flash-lite-latest';
   const FALLBACK_MODELS = ['gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'];
+  const CLAUDE_DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
+  const CLAUDE_FALLBACK_MODELS = ['claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'claude-sonnet-5'];
 
-  /* ---------- 설정(API Key / 모델) ---------- */
+  /* ---------- 설정(AI 제공자 / API Key / 모델) ---------- */
   apiKeyInput.value = localStorage.getItem('gemini_api_key') || '';
   modelInput.value = localStorage.getItem('gemini_model') || DEFAULT_MODEL;
+  claudeApiKeyInput.value = localStorage.getItem('claude_api_key') || '';
+  claudeModelInput.value = localStorage.getItem('claude_model') || CLAUDE_DEFAULT_MODEL;
+
+  function setProviderFieldsVisible(provider) {
+    geminiFields.style.display = provider === 'claude' ? 'none' : 'block';
+    claudeFields.style.display = provider === 'claude' ? 'block' : 'none';
+  }
+  providerSelect.value = localStorage.getItem('ai_provider') || 'gemini';
+  setProviderFieldsVisible(providerSelect.value);
+  providerSelect.addEventListener('change', () => setProviderFieldsVisible(providerSelect.value));
 
   /* ---------- 시험지 정보(제목 블록) ---------- */
   examTitleInput.value = localStorage.getItem('exam_title') || '';
@@ -436,6 +571,9 @@
   saveModalBtn.addEventListener('click', () => {
     localStorage.setItem('gemini_api_key', apiKeyInput.value.trim());
     localStorage.setItem('gemini_model', modelInput.value.trim() || DEFAULT_MODEL);
+    localStorage.setItem('claude_api_key', claudeApiKeyInput.value.trim());
+    localStorage.setItem('claude_model', claudeModelInput.value.trim() || CLAUDE_DEFAULT_MODEL);
+    localStorage.setItem('ai_provider', providerSelect.value);
     settingsModal.classList.remove('open');
   });
 
@@ -538,11 +676,11 @@
   function friendlyError(err) {
     const msg = err && err.message ? err.message : String(err);
     if (/Failed to fetch|NetworkError|network/i.test(msg)) return '네트워크 연결을 확인해주세요.';
-    if (/API key not valid|API_KEY_INVALID|401|PERMISSION_DENIED|403/i.test(msg)) return 'API 키가 올바르지 않습니다. 설정에서 다시 확인해주세요.';
+    if (/API key not valid|API_KEY_INVALID|invalid x-api-key|authentication_error|401|PERMISSION_DENIED|403/i.test(msg)) return 'API 키가 올바르지 않습니다. 설정에서 다시 확인해주세요.';
     return msg;
   }
   function isModelNotFoundError(err) {
-    return err && typeof err.message === 'string' && /not found|is not supported for generateContent/i.test(err.message);
+    return err && typeof err.message === 'string' && /not found|is not supported for generateContent|not_found_error/i.test(err.message);
   }
 
   const RESPONSE_SCHEMA = {
@@ -590,10 +728,92 @@
     return parsed;
   }
 
+  const CLAUDE_TOOL_SCHEMA = {
+    name: 'extract_questions',
+    description: '시험 문제지 이미지에서 추출한 문항 배열을 반환한다.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        questions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              number: { type: 'string' },
+              question: { type: 'string' },
+              box: { type: ['string', 'null'] },
+              choices: { type: 'array', items: { type: 'string' } },
+              score: { type: ['string', 'null'] }
+            },
+            required: ['number', 'question', 'choices']
+          }
+        }
+      },
+      required: ['questions']
+    }
+  };
+
+  async function callClaude(model, apiKey, mimeType, base64Data) {
+    const url = 'https://api.anthropic.com/v1/messages';
+    const body = {
+      model: model,
+      max_tokens: 4096,
+      tools: [CLAUDE_TOOL_SCHEMA],
+      tool_choice: { type: 'tool', name: 'extract_questions' },
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: EXTRACT_PROMPT },
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Data } }
+        ]
+      }]
+    };
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+    const toolUse = Array.isArray(data.content) ? data.content.find((b) => b.type === 'tool_use' && b.name === 'extract_questions') : null;
+    if (!toolUse || !toolUse.input || !Array.isArray(toolUse.input.questions)) {
+      throw new Error('AI 응답에서 결과를 찾을 수 없습니다.');
+    }
+    const parsed = toolUse.input.questions;
+    if (parsed.length === 0) throw new Error('추출된 문항이 없습니다. 다른 이미지로 다시 시도해주세요.');
+    return parsed;
+  }
+
+  const PROVIDERS = {
+    gemini: {
+      label: 'Gemini',
+      getApiKey: () => apiKeyInput.value.trim(),
+      getModel: () => modelInput.value.trim() || DEFAULT_MODEL,
+      fallbackModels: FALLBACK_MODELS,
+      call: callGemini
+    },
+    claude: {
+      label: 'Claude',
+      getApiKey: () => claudeApiKeyInput.value.trim(),
+      getModel: () => claudeModelInput.value.trim() || CLAUDE_DEFAULT_MODEL,
+      fallbackModels: CLAUDE_FALLBACK_MODELS,
+      call: callClaude
+    }
+  };
+
   convertBtn.addEventListener('click', async () => {
-    const apiKey = apiKeyInput.value.trim();
+    const provider = PROVIDERS[providerSelect.value] || PROVIDERS.gemini;
+    const apiKey = provider.getApiKey();
     if (!apiKey) {
-      alert('Gemini API Key를 입력해주세요. (우측 상단 "API Key 설정")');
+      alert(provider.label + ' API Key를 입력해주세요. (우측 상단 "AI 설정")');
       settingsModal.classList.add('open');
       return;
     }
@@ -604,6 +824,7 @@
 
     convertBtn.disabled = true;
     downloadBtn.disabled = true;
+    saveBankBtn.disabled = true;
     showProgress();
     setProgress(8, '이미지 인코딩 중...');
 
@@ -612,8 +833,8 @@
       const mimeType = selectedFile.type || 'image/jpeg';
       setProgress(20, '요청 준비 중...');
 
-      const requestedModel = modelInput.value.trim() || DEFAULT_MODEL;
-      const candidates = [requestedModel].concat(FALLBACK_MODELS.filter((m) => m !== requestedModel));
+      const requestedModel = provider.getModel();
+      const candidates = [requestedModel].concat(provider.fallbackModels.filter((m) => m !== requestedModel));
 
       let parsed = null;
       let lastError = null;
@@ -622,7 +843,7 @@
         setProgress(30, model + ' 모델로 전송 중...');
         startFakeProgress(35, 85, model + '가 문제를 분석 중입니다...');
         try {
-          parsed = await callGemini(model, apiKey, mimeType, base64Data);
+          parsed = await provider.call(model, apiKey, mimeType, base64Data);
           stopFakeProgress();
           setProgress(92, '응답 파싱 중...');
           break;
@@ -641,6 +862,7 @@
       extractedQuestions = parsed;
       renderPreview(parsed);
       downloadBtn.disabled = false;
+      saveBankBtn.disabled = !firebaseReady;
       resultCount.textContent = parsed.length + '개 문항';
       setTimeout(hideProgress, 1200);
     } catch (err) {
@@ -1037,6 +1259,155 @@
     } finally {
       downloadBtn.disabled = false;
     }
+  });
+
+  /* ---------- 문제은행 (Firebase) ---------- */
+  let firestoreDb = null;
+  let firebaseReady = false;
+  let bankCache = [];
+
+  function updateBankStatus(connected, errMsg) {
+    firebaseReady = connected;
+    bankStatusText.classList.toggle('connected', connected);
+    bankStatusText.classList.toggle('error', !connected && !!errMsg);
+    bankStatusText.textContent = connected ? 'Firebase 연결됨' : (errMsg ? ('연결 실패: ' + errMsg) : 'Firebase 연결 안 됨');
+    saveBankBtn.disabled = !connected || !extractedQuestions || extractedQuestions.length === 0;
+  }
+
+  function initFirebase(configStr) {
+    try {
+      const config = JSON.parse(configStr);
+      if (window.firebase && firebase.apps && firebase.apps.length) {
+        firebase.apps.slice().forEach((a) => a.delete());
+      }
+      firebase.initializeApp(config);
+      firestoreDb = firebase.firestore();
+      return firebase.auth().signInAnonymously()
+        .then(() => { updateBankStatus(true); loadBankList(); })
+        .catch((err) => { updateBankStatus(false, err.message); });
+    } catch (e) {
+      updateBankStatus(false, e.message);
+      return Promise.resolve();
+    }
+  }
+
+  bankSetupBtn.addEventListener('click', () => { bankModal.classList.add('open'); });
+  closeBankModalBtn.addEventListener('click', () => { bankModal.classList.remove('open'); });
+  bankModal.addEventListener('click', (e) => { if (e.target === bankModal) bankModal.classList.remove('open'); });
+  saveBankModalBtn.addEventListener('click', () => {
+    const configStr = firebaseConfigInput.value.trim();
+    if (!configStr) { alert('Firebase config를 붙여넣어주세요.'); return; }
+    localStorage.setItem('firebase_config', configStr);
+    initFirebase(configStr).then(() => { bankModal.classList.remove('open'); });
+  });
+
+  const savedFirebaseConfig = localStorage.getItem('firebase_config');
+  if (savedFirebaseConfig) {
+    firebaseConfigInput.value = savedFirebaseConfig;
+    initFirebase(savedFirebaseConfig);
+  }
+
+  function renderBankList(items) {
+    bankList.innerHTML = '';
+    if (!items || items.length === 0) {
+      bankList.innerHTML = '<div class="empty-hint">저장된 시험지가 없습니다.</div>';
+      return;
+    }
+    items.forEach((item) => {
+      const el = document.createElement('div');
+      el.className = 'bank-item';
+      const dateStr = item.createdAt ? new Date(item.createdAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      el.innerHTML =
+        '<div class="bank-item-info">' +
+          '<div class="bank-item-title">' + escapeHtml(item.examTitle || item.examSubject || '(제목 없음)') + '</div>' +
+          '<div class="bank-item-meta">' + escapeHtml(item.examSubject || '') + ' · ' + (item.questionCount || 0) + '문항 · ' + dateStr + '</div>' +
+        '</div>' +
+        '<div class="bank-item-actions">' +
+          '<button class="bank-load-btn" data-id="' + item.id + '">불러오기</button>' +
+          '<button class="bank-delete-btn" data-id="' + item.id + '">삭제</button>' +
+        '</div>';
+      bankList.appendChild(el);
+    });
+
+    bankList.querySelectorAll('.bank-load-btn').forEach((btn) => {
+      btn.addEventListener('click', () => loadBankItem(btn.getAttribute('data-id')));
+    });
+    bankList.querySelectorAll('.bank-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', () => deleteBankItem(btn.getAttribute('data-id')));
+    });
+  }
+
+  function loadBankList() {
+    if (!firebaseReady || !firestoreDb) return;
+    firestoreDb.collection('exam_batches').orderBy('createdAt', 'desc').limit(30).get()
+      .then((snapshot) => {
+        bankCache = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          bankCache.push({
+            id: doc.id,
+            examTitle: data.examTitle, examSubject: data.examSubject, examNote: data.examNote,
+            questions: data.questions, questionCount: data.questionCount,
+            provider: data.provider, model: data.model,
+            createdAt: data.createdAt && data.createdAt.toMillis ? data.createdAt.toMillis() : null
+          });
+        });
+        applyBankSearch();
+      })
+      .catch((err) => { bankList.innerHTML = '<div class="empty-hint">목록을 불러오지 못했습니다: ' + escapeHtml(err.message) + '</div>'; });
+  }
+
+  function applyBankSearch() {
+    const term = bankSearchInput.value.trim().toLowerCase();
+    if (!term) { renderBankList(bankCache); return; }
+    const filtered = bankCache.filter((item) => {
+      const hay = ((item.examTitle || '') + ' ' + (item.examSubject || '')).toLowerCase();
+      return hay.indexOf(term) !== -1;
+    });
+    renderBankList(filtered);
+  }
+  bankSearchBtn.addEventListener('click', applyBankSearch);
+  bankSearchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyBankSearch(); });
+
+  function loadBankItem(id) {
+    const item = bankCache.find((it) => it.id === id);
+    if (!item) return;
+    extractedQuestions = item.questions;
+    examTitleInput.value = item.examTitle || '';
+    examSubjectInput.value = item.examSubject || '';
+    examNoteInput.value = item.examNote || '';
+    renderPreview(item.questions);
+    downloadBtn.disabled = false;
+    resultCount.textContent = item.questions.length + '개 문항 (문제은행에서 불러옴)';
+  }
+
+  function deleteBankItem(id) {
+    if (!confirm('이 시험지를 문제은행에서 삭제할까요?')) return;
+    firestoreDb.collection('exam_batches').doc(id).delete()
+      .then(() => loadBankList())
+      .catch((err) => alert('삭제 실패: ' + err.message));
+  }
+
+  saveBankBtn.addEventListener('click', () => {
+    if (!firebaseReady || !firestoreDb) { alert('먼저 Firebase를 연결해주세요.'); return; }
+    if (!extractedQuestions || extractedQuestions.length === 0) { alert('먼저 AI 문제 분석을 실행해주세요.'); return; }
+    saveBankBtn.disabled = true;
+    firestoreDb.collection('exam_batches').add({
+      examTitle: examTitleInput.value.trim(),
+      examSubject: examSubjectInput.value.trim(),
+      examNote: examNoteInput.value.trim(),
+      questions: extractedQuestions,
+      questionCount: extractedQuestions.length,
+      provider: providerSelect.value,
+      model: (PROVIDERS[providerSelect.value] || PROVIDERS.gemini).getModel(),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(() => {
+      loadBankList();
+      saveBankBtn.disabled = false;
+    }).catch((err) => {
+      alert('저장 실패: ' + err.message);
+      saveBankBtn.disabled = false;
+    });
   });
 })();
 </script>
