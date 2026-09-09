@@ -388,11 +388,11 @@
     border-radius: 10px;
     padding: 10px 12px;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    flex-direction: column;
+    gap: 8px;
     background: var(--card-soft);
   }
+  .bank-item-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .bank-item-info { min-width: 0; }
   .bank-item-title { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
   .bank-item-meta { font-size: 12px; color: var(--sub); margin-top: 2px; }
@@ -410,6 +410,24 @@
   .bank-load-btn:hover { box-shadow: 0 0 12px rgba(83, 230, 216, 0.3); }
   .bank-delete-btn { background: rgba(255, 107, 129, 0.14); color: var(--danger); }
   .bank-delete-btn:hover { box-shadow: 0 0 12px rgba(255, 107, 129, 0.3); }
+  .bank-expand-btn { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+  .bank-expand-btn:hover { box-shadow: 0 0 12px rgba(255, 255, 255, 0.15); }
+  .cart-move-btn { background: rgba(255, 255, 255, 0.08); color: var(--text); width: 30px; padding: 6px 0 !important; }
+
+  .bank-item-questions { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .bank-q-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text); }
+  .bank-q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .bank-q-add-btn {
+    border: none;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    background: rgba(83, 230, 216, 0.14);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
 </style>
 </head>
 <body>
@@ -475,6 +493,7 @@
         <div class="bank-search-row">
           <input type="text" class="field-input" id="bankSearchInput" placeholder="제목·과목으로 검색">
           <button class="btn btn-secondary" id="bankSearchBtn" style="flex:0 0 auto;">검색</button>
+          <button class="btn btn-secondary" id="openCartBtn" style="flex:0 0 auto;">🛒 <span id="cartCount">0</span></button>
         </div>
         <div class="bank-list" id="bankList">
           <div class="empty-hint">Firebase를 연결하면 저장된 시험지 목록이 여기 표시됩니다.</div>
@@ -541,6 +560,21 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="cartModal">
+  <div class="modal">
+    <h3>장바구니</h3>
+    <div class="help-text">여러 시험지의 문항을 모아 새 시험지를 만들 수 있습니다. 문제은행 목록에서 "문항 보기"를 눌러 개별 문항을 담아주세요.</div>
+    <div class="bank-list" id="cartList" style="max-height:320px;">
+      <div class="empty-hint">담은 문항이 없습니다.</div>
+    </div>
+    <div class="modal-actions" style="margin-top:14px;">
+      <button class="btn modal-close" id="closeCartModalBtn">닫기</button>
+      <button class="btn btn-secondary" id="clearCartBtn" style="flex:0 0 auto;">비우기</button>
+      <button class="btn btn-primary" id="buildFromCartBtn" style="margin-top:0;">새 시험지 만들기</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   const settingsBtn = document.getElementById('settingsBtn');
@@ -567,6 +601,13 @@
   const bankSearchBtn = document.getElementById('bankSearchBtn');
   const bankList = document.getElementById('bankList');
   const saveBankBtn = document.getElementById('saveBankBtn');
+  const openCartBtn = document.getElementById('openCartBtn');
+  const cartCountEl = document.getElementById('cartCount');
+  const cartModal = document.getElementById('cartModal');
+  const closeCartModalBtn = document.getElementById('closeCartModalBtn');
+  const clearCartBtn = document.getElementById('clearCartBtn');
+  const buildFromCartBtn = document.getElementById('buildFromCartBtn');
+  const cartList = document.getElementById('cartList');
 
   const examTitleInput = document.getElementById('examTitleInput');
   const examSubjectInput = document.getElementById('examSubjectInput');
@@ -1422,15 +1463,26 @@
       const el = document.createElement('div');
       el.className = 'bank-item';
       const dateStr = item.createdAt ? new Date(item.createdAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-      el.innerHTML =
-        '<div class="bank-item-info">' +
-          '<div class="bank-item-title">' + escapeHtml(item.examTitle || item.examSubject || '(제목 없음)') + '</div>' +
-          '<div class="bank-item-meta">' + escapeHtml(item.examSubject || '') + ' · ' + (item.questionCount || 0) + '문항 · ' + dateStr + '</div>' +
-        '</div>' +
-        '<div class="bank-item-actions">' +
-          '<button class="bank-load-btn" data-id="' + item.id + '">불러오기</button>' +
-          '<button class="bank-delete-btn" data-id="' + item.id + '">삭제</button>' +
+      const questionsHtml = (item.questions || []).map((q, qi) => {
+        const label = (q.number ? String(q.number) + '. ' : '') + (q.question || '');
+        return '<div class="bank-q-row">' +
+          '<span class="bank-q-text">' + escapeHtml(label.length > 34 ? label.slice(0, 34) + '…' : label) + '</span>' +
+          '<button class="bank-q-add-btn" data-bid="' + item.id + '" data-qi="' + qi + '">담기</button>' +
         '</div>';
+      }).join('');
+      el.innerHTML =
+        '<div class="bank-item-row">' +
+          '<div class="bank-item-info">' +
+            '<div class="bank-item-title">' + escapeHtml(item.examTitle || item.examSubject || '(제목 없음)') + '</div>' +
+            '<div class="bank-item-meta">' + escapeHtml(item.examSubject || '') + ' · ' + (item.questionCount || 0) + '문항 · ' + dateStr + '</div>' +
+          '</div>' +
+          '<div class="bank-item-actions">' +
+            '<button class="bank-expand-btn" data-id="' + item.id + '">문항 보기</button>' +
+            '<button class="bank-load-btn" data-id="' + item.id + '">불러오기</button>' +
+            '<button class="bank-delete-btn" data-id="' + item.id + '">삭제</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="bank-item-questions" id="bank-q-' + item.id + '" style="display:none;">' + questionsHtml + '</div>';
       bankList.appendChild(el);
     });
 
@@ -1440,7 +1492,112 @@
     bankList.querySelectorAll('.bank-delete-btn').forEach((btn) => {
       btn.addEventListener('click', () => deleteBankItem(btn.getAttribute('data-id')));
     });
+    bankList.querySelectorAll('.bank-expand-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const panel = document.getElementById('bank-q-' + btn.getAttribute('data-id'));
+        if (!panel) return;
+        const show = panel.style.display === 'none';
+        panel.style.display = show ? 'flex' : 'none';
+        btn.textContent = show ? '접기' : '문항 보기';
+      });
+    });
+    bankList.querySelectorAll('.bank-q-add-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const item = bankCache.find((it) => it.id === btn.getAttribute('data-bid'));
+        if (!item) return;
+        const q = item.questions[parseInt(btn.getAttribute('data-qi'), 10)];
+        if (!q) return;
+        addToCart(q, item.examTitle || item.examSubject || '');
+        btn.textContent = '담김';
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = '담기'; btn.disabled = false; }, 1200);
+      });
+    });
   }
+
+  /* ---------- 장바구니 (여러 시험지 문항을 섞어 새 시험지 구성) ---------- */
+  let cartItems = [];
+  function loadCartFromStorage() {
+    try { cartItems = JSON.parse(localStorage.getItem('bank_cart') || '[]'); } catch (e) { cartItems = []; }
+    renderCartCount();
+  }
+  function saveCartToStorage() { localStorage.setItem('bank_cart', JSON.stringify(cartItems)); }
+  function renderCartCount() { cartCountEl.textContent = String(cartItems.length); }
+
+  function addToCart(question, sourceTitle) {
+    cartItems.push({ question: question, sourceTitle: sourceTitle || '' });
+    saveCartToStorage();
+    renderCartCount();
+  }
+
+  function renderCartModal() {
+    if (cartItems.length === 0) {
+      cartList.innerHTML = '<div class="empty-hint">담은 문항이 없습니다.</div>';
+      return;
+    }
+    cartList.innerHTML = cartItems.map((c, idx) => {
+      const label = (c.question.number ? String(c.question.number) + '. ' : '') + (c.question.question || '');
+      return '<div class="bank-item">' +
+        '<div class="bank-item-row">' +
+          '<div class="bank-item-info">' +
+            '<div class="bank-item-title">' + escapeHtml(label.length > 36 ? label.slice(0, 36) + '…' : label) + '</div>' +
+            '<div class="bank-item-meta">' + escapeHtml(c.sourceTitle || '') + '</div>' +
+          '</div>' +
+          '<div class="bank-item-actions">' +
+            '<button class="cart-move-btn" data-idx="' + idx + '" data-dir="-1">↑</button>' +
+            '<button class="cart-move-btn" data-idx="' + idx + '" data-dir="1">↓</button>' +
+            '<button class="bank-delete-btn" data-idx="' + idx + '">삭제</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    cartList.querySelectorAll('.cart-move-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.getAttribute('data-idx'), 10);
+        const dir = parseInt(btn.getAttribute('data-dir'), 10);
+        const newIdx = idx + dir;
+        if (newIdx < 0 || newIdx >= cartItems.length) return;
+        const tmp = cartItems[idx];
+        cartItems[idx] = cartItems[newIdx];
+        cartItems[newIdx] = tmp;
+        saveCartToStorage();
+        renderCartModal();
+      });
+    });
+    cartList.querySelectorAll('.bank-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        cartItems.splice(parseInt(btn.getAttribute('data-idx'), 10), 1);
+        saveCartToStorage();
+        renderCartCount();
+        renderCartModal();
+      });
+    });
+  }
+
+  openCartBtn.addEventListener('click', () => { renderCartModal(); cartModal.classList.add('open'); });
+  closeCartModalBtn.addEventListener('click', () => { cartModal.classList.remove('open'); });
+  cartModal.addEventListener('click', (e) => { if (e.target === cartModal) cartModal.classList.remove('open'); });
+  clearCartBtn.addEventListener('click', () => {
+    if (cartItems.length === 0) return;
+    if (!confirm('장바구니를 비울까요?')) return;
+    cartItems = [];
+    saveCartToStorage();
+    renderCartCount();
+    renderCartModal();
+  });
+  buildFromCartBtn.addEventListener('click', () => {
+    if (cartItems.length === 0) { alert('장바구니가 비어 있습니다.'); return; }
+    const merged = cartItems.map((c, idx) => Object.assign({}, c.question, { number: String(idx + 1) }));
+    extractedQuestions = merged;
+    renderPreview(merged);
+    downloadBtn.disabled = false;
+    saveBankBtn.disabled = !firebaseReady;
+    resultCount.textContent = merged.length + '개 문항 (장바구니에서 구성)';
+    cartModal.classList.remove('open');
+  });
+
+  loadCartFromStorage();
 
   function loadBankList() {
     if (!firebaseReady || !firestoreDb) return;
