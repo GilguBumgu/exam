@@ -151,7 +151,7 @@
     <h2>Gemini API Key</h2>
     <input type="password" id="apiKeyInput" placeholder="Gemini API Key를 입력하세요" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <h2 style="margin-top:14px;">모델 (오류 발생 시 변경)</h2>
-    <input type="text" id="modelInput" placeholder="gemini-flash-latest" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <input type="text" id="modelInput" placeholder="gemini-3.6-flash" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <p style="font-size:12px;color:var(--sub);margin:6px 2px 0;">"models/xxx not found" 오류가 나면 이 칸에 gemini-2.5-flash 등 다른 모델명을 입력해보세요.</p>
   </div>
 
@@ -207,8 +207,8 @@
   let selectedFile = null;
   let extractedQuestions = null;
 
-  const DEFAULT_MODEL = 'gemini-flash-latest';
-  const FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'];
+  const DEFAULT_MODEL = 'gemini-3.6-flash';
+  const FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'];
 
   const savedKey = localStorage.getItem('gemini_api_key');
   if (savedKey) apiKeyInput.value = savedKey;
@@ -304,7 +304,7 @@
 
     convertBtn.disabled = true;
     downloadBtn.disabled = true;
-    showStatus('AI 분석 중...', false, true);
+    showStatus('Gemini 3.6 Flash가 문제를 분석 중입니다...', false, true);
 
     try {
       const base64Data = await fileToBase64(selectedFile);
@@ -318,7 +318,7 @@
       let lastError = null;
 
       for (const model of candidates) {
-        showStatus('AI 분석 중... (' + model + ')', false, true);
+        showStatus(model + '가 문제를 분석 중입니다...', false, true);
         try {
           parsed = await callGemini(model, apiKey, mimeType, base64Data);
           workingModel = model;
@@ -460,18 +460,48 @@
     }
   });
 
+  const FONT_NUMBER = '한양 견명조';
+  const FONT_BODY = '신명 중명조';
+  const FONT_CHOICE = '한양 신명조';
+  const FONT_MATH = 'HyhwpEQ';
+
+  const MATH_OR_DIGIT_RE = /\$([^$]+)\$|(\d+(?:\.\d+)?)/g;
+
+  function buildRuns(text, font, size, bold) {
+    const { TextRun } = window.docx;
+    const runs = [];
+    const str = text === null || text === undefined ? '' : String(text);
+    if (!str) return [new TextRun({ text: '', font, size, bold: !!bold })];
+
+    let lastIndex = 0;
+    let match;
+    MATH_OR_DIGIT_RE.lastIndex = 0;
+    while ((match = MATH_OR_DIGIT_RE.exec(str)) !== null) {
+      if (match.index > lastIndex) {
+        runs.push(new TextRun({ text: str.slice(lastIndex, match.index), font, size, bold: !!bold }));
+      }
+      const mathText = match[1] !== undefined ? match[1] : match[2];
+      runs.push(new TextRun({ text: mathText, font: FONT_MATH, size, bold: !!bold }));
+      lastIndex = MATH_OR_DIGIT_RE.lastIndex;
+    }
+    if (lastIndex < str.length) {
+      runs.push(new TextRun({ text: str.slice(lastIndex), font, size, bold: !!bold }));
+    }
+    return runs;
+  }
+
   function buildDocx(questions) {
-    const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, AlignmentType } = window.docx;
+    const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType } = window.docx;
 
     const children = [];
 
     questions.forEach((q) => {
+      const numberRuns = [new TextRun({ text: (q.number ? String(q.number) + '. ' : ''), font: FONT_NUMBER, size: 26, bold: true })];
+      const questionRuns = buildRuns(q.question, FONT_BODY, 22, false);
+
       children.push(new Paragraph({
         spacing: { before: 240, after: 80 },
-        children: [
-          new TextRun({ text: (q.number ? String(q.number) + '. ' : '') , bold: true, size: 22 }),
-          new TextRun({ text: q.question || '', bold: true, size: 22 })
-        ]
+        children: numberRuns.concat(questionRuns)
       }));
 
       if (q.box) {
@@ -491,7 +521,7 @@
                   margins: { top: 100, bottom: 100, left: 120, right: 120 },
                   children: [
                     new Paragraph({
-                      children: [new TextRun({ text: q.box, size: 22 })]
+                      children: buildRuns(q.box, FONT_BODY, 22, false)
                     })
                   ]
                 })
@@ -507,7 +537,7 @@
         q.choices.forEach((c) => {
           children.push(new Paragraph({
             spacing: { after: 40 },
-            children: [new TextRun({ text: c, size: 22 })]
+            children: buildRuns(c, FONT_CHOICE, 22, false)
           }));
         });
       }
