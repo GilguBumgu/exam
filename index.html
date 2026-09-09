@@ -286,6 +286,35 @@
   }
   .q-choices { display: flex; flex-direction: column; gap: 4px; font-size: 15px; color: var(--text); }
 
+  .var-gen-btn {
+    display: inline-flex;
+    margin-top: 10px;
+    border: 1px solid rgba(226, 115, 169, 0.4);
+    background: rgba(226, 115, 169, 0.1);
+    color: var(--accent2);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+  .var-gen-btn:hover { box-shadow: 0 0 14px rgba(226, 115, 169, 0.3); }
+  .var-gen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .var-result:empty { display: none; }
+  .var-result {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid rgba(226, 115, 169, 0.3);
+    border-radius: 10px;
+    background: rgba(226, 115, 169, 0.05);
+  }
+  .var-result .q-text, .var-result .q-box, .var-result .q-choices { font-size: 14px; }
+  .var-label { font-size: 11px; font-weight: 700; color: var(--accent2); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .var-answer { font-size: 13px; color: var(--text); margin-top: 8px; }
+  .var-explanation { font-size: 13px; color: var(--sub); margin-top: 6px; line-height: 1.6; }
+  .var-error { font-size: 12px; color: var(--danger); }
+
   .empty-hint { color: var(--sub); font-size: 13px; text-align: center; padding: 26px 10px; }
 
   .field-label { font-size: 11px; color: var(--sub); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; display: block; margin-bottom: 4px; }
@@ -911,6 +940,154 @@
     }
   };
 
+  /* ---------- 유사/변형 문제 생성 ---------- */
+  const VARIATION_SCHEMA = {
+    type: 'OBJECT',
+    properties: {
+      number: { type: 'STRING' },
+      question: { type: 'STRING' },
+      box: { type: 'STRING', nullable: true },
+      choices: { type: 'ARRAY', items: { type: 'STRING' } },
+      score: { type: 'STRING', nullable: true },
+      answer: { type: 'STRING' },
+      explanation: { type: 'STRING' }
+    },
+    required: ['question', 'answer', 'explanation']
+  };
+
+  const VARIATION_TOOL_SCHEMA = {
+    name: 'create_variation',
+    description: '원본 문제와 유형·난이도가 같은 변형 문제와 해설을 반환한다.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        number: { type: 'string' },
+        question: { type: 'string' },
+        box: { type: ['string', 'null'] },
+        choices: { type: 'array', items: { type: 'string' } },
+        score: { type: ['string', 'null'] },
+        answer: { type: 'string' },
+        explanation: { type: 'string' }
+      },
+      required: ['question', 'answer', 'explanation']
+    }
+  };
+
+  function buildVariationPrompt(original) {
+    return '다음은 원본 시험 문제야. 이 문제와 출제 의도·유형·난이도는 동일하게 유지하되, ' +
+      '수치나 지문 소재를 바꾼 유사(변형) 문제를 하나 만들어줘.\n' +
+      '- 반드시 정답(answer)과 단계별 풀이(explanation)를 함께 제공해.\n' +
+      '- 수식은 LaTeX로 작성하고 인라인 수식은 $...$ 로 감싸.\n' +
+      '- 선택지가 있는 문제라면 choices도 "① ..." 형식으로 새로 만들어.\n' +
+      '- 원본 문제: ' + JSON.stringify({ number: original.number, question: original.question, box: original.box, choices: original.choices, score: original.score }) + '\n' +
+      '반드시 주어진 JSON 스키마 형식으로만 응답해.';
+  }
+
+  async function generateVariationGemini(model, apiKey, prompt) {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+    const body = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: VARIATION_SCHEMA }
+    };
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+    const candidate = data && data.candidates && data.candidates[0];
+    const rawText = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
+    if (!rawText) throw new Error('AI 응답에서 결과를 찾을 수 없습니다.');
+    let parsed;
+    try { parsed = JSON.parse(rawText); } catch (e) { throw new Error('AI 응답을 JSON으로 해석하지 못했습니다.'); }
+    return parsed;
+  }
+
+  async function generateVariationClaude(model, apiKey, prompt) {
+    const url = 'https://api.anthropic.com/v1/messages';
+    const body = {
+      model: model,
+      max_tokens: 2048,
+      tools: [VARIATION_TOOL_SCHEMA],
+      tool_choice: { type: 'tool', name: 'create_variation' },
+      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }]
+    };
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+    const toolUse = Array.isArray(data.content) ? data.content.find((b) => b.type === 'tool_use' && b.name === 'create_variation') : null;
+    if (!toolUse || !toolUse.input) throw new Error('AI 응답에서 결과를 찾을 수 없습니다.');
+    return toolUse.input;
+  }
+
+  const VARIATION_PROVIDERS = {
+    gemini: { getApiKey: PROVIDERS.gemini.getApiKey, getModel: PROVIDERS.gemini.getModel, fallbackModels: FALLBACK_MODELS, call: generateVariationGemini },
+    claude: { getApiKey: PROVIDERS.claude.getApiKey, getModel: PROVIDERS.claude.getModel, fallbackModels: CLAUDE_FALLBACK_MODELS, call: generateVariationClaude }
+  };
+
+  function renderVariationBlock(el, v) {
+    let html = '<div class="var-label">🔄 변형 문제</div>';
+    html += '<div class="q-text">' + escapeHtml(v.question || '') + '</div>';
+    if (v.box) html += '<div class="q-box">' + escapeHtml(v.box) + '</div>';
+    if (Array.isArray(v.choices) && v.choices.length > 0) {
+      html += '<div class="q-choices">' + v.choices.map((c) => '<div>' + escapeHtml(c) + '</div>').join('') + '</div>';
+    }
+    if (v.answer) html += '<div class="var-answer"><b>정답</b> ' + escapeHtml(v.answer) + '</div>';
+    if (v.explanation) html += '<div class="var-explanation"><b>해설</b><br>' + escapeHtml(v.explanation) + '</div>';
+    el.innerHTML = html;
+    if (window.MathJax && window.MathJax.typesetPromise) window.MathJax.typesetPromise([el]).catch(() => {});
+  }
+
+  async function generateVariationForCard(q, btn, resultEl) {
+    const provider = VARIATION_PROVIDERS[providerSelect.value] || VARIATION_PROVIDERS.gemini;
+    const apiKey = provider.getApiKey();
+    if (!apiKey) {
+      alert('AI API Key를 입력해주세요. (우측 상단 "AI 설정")');
+      settingsModal.classList.add('open');
+      return;
+    }
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '생성 중...';
+    resultEl.innerHTML = '';
+    try {
+      const prompt = buildVariationPrompt(q);
+      const requestedModel = provider.getModel();
+      const candidates = [requestedModel].concat(provider.fallbackModels.filter((m) => m !== requestedModel));
+      let variation = null;
+      let lastError = null;
+      for (const model of candidates) {
+        try {
+          variation = await provider.call(model, apiKey, prompt);
+          break;
+        } catch (err) {
+          lastError = err;
+          if (!isModelNotFoundError(err)) break;
+        }
+      }
+      if (!variation) throw lastError || new Error('변형 문제 생성에 실패했습니다.');
+      q.variation = variation;
+      renderVariationBlock(resultEl, variation);
+    } catch (err) {
+      resultEl.innerHTML = '<div class="var-error">오류: ' + escapeHtml(friendlyError(err)) + '</div>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  }
+
   convertBtn.addEventListener('click', async () => {
     const provider = PROVIDERS[providerSelect.value] || PROVIDERS.gemini;
     const apiKey = provider.getApiKey();
@@ -1008,6 +1185,16 @@
         });
         card.appendChild(choicesEl);
       }
+
+      const varBtn = document.createElement('button');
+      varBtn.className = 'var-gen-btn';
+      varBtn.textContent = '🔄 변형 문제 생성';
+      const varResult = document.createElement('div');
+      varResult.className = 'var-result';
+      varBtn.addEventListener('click', () => generateVariationForCard(q, varBtn, varResult));
+      card.appendChild(varBtn);
+      card.appendChild(varResult);
+      if (q.variation) renderVariationBlock(varResult, q.variation);
 
       previewArea.appendChild(card);
     });
@@ -1319,6 +1506,51 @@
           q.choices.forEach((c) => {
             questionChildren.push(new Paragraph({ spacing: { after: 40 }, children: buildParagraphChildren(c, FONT_CHOICE, 22, false) }));
           });
+        }
+      }
+
+      if (q.variation) {
+        const v = q.variation;
+        questionChildren.push(new Paragraph({
+          spacing: { before: 100, after: 60 },
+          children: [new TextRun({ text: '▶ 변형 문제', font: FONT_NUMBER, size: 22, bold: true, color: 'C2478A' })]
+        }));
+        questionChildren.push(new Paragraph({ spacing: { after: 60 }, children: buildParagraphChildren(v.question, FONT_BODY, 22, false) }));
+        if (v.box) {
+          questionChildren.push(new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [new TableRow({
+              children: [new TableCell({
+                shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'F2F2F2' },
+                borders: {
+                  top: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
+                  bottom: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
+                  left: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
+                  right: { style: BorderStyle.SINGLE, size: 4, color: '999999' }
+                },
+                margins: { top: 100, bottom: 100, left: 120, right: 120 },
+                children: [new Paragraph({ children: buildParagraphChildren(v.box, FONT_BODY, 22, false) })]
+              })]
+            })]
+          }));
+          questionChildren.push(new Paragraph({ text: '', spacing: { after: 60 } }));
+        }
+        if (Array.isArray(v.choices) && v.choices.length > 0) {
+          v.choices.forEach((c) => {
+            questionChildren.push(new Paragraph({ spacing: { after: 30 }, children: buildParagraphChildren(c, FONT_CHOICE, 22, false) }));
+          });
+        }
+        if (v.answer) {
+          questionChildren.push(new Paragraph({
+            spacing: { before: 60, after: 30 },
+            children: [new TextRun({ text: '정답: ', font: FONT_BODY, size: 20, bold: true })].concat(buildParagraphChildren(v.answer, FONT_BODY, 20, false))
+          }));
+        }
+        if (v.explanation) {
+          questionChildren.push(new Paragraph({
+            spacing: { after: 60 },
+            children: [new TextRun({ text: '해설: ', font: FONT_BODY, size: 20, bold: true })].concat(buildParagraphChildren(v.explanation, FONT_BODY, 20, false))
+          }));
         }
       }
 
