@@ -12,6 +12,14 @@
 <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js';
+  }
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://unpkg.com/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
 <script>
   window.MathJax = {
     tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] },
@@ -161,6 +169,37 @@
   .dropzone .icon { font-size: 34px; margin-bottom: 8px; filter: drop-shadow(0 0 10px rgba(83,230,216,0.35)); }
   .dropzone .main-text { font-weight: 600; font-size: 15px; margin-bottom: 4px; color: var(--text); }
   .dropzone .sub-text { font-size: 12px; color: var(--sub); }
+
+  .pdf-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--sub);
+  }
+  .pdf-nav .btn-camera { width: 40px; padding: 8px; font-size: 13px; }
+
+  .crop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+  .crop-thumb {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--card-soft);
+  }
+  .crop-thumb img { display: block; width: 100%; height: 90px; object-fit: contain; background: #0c0d11; }
+  .crop-thumb .crop-label {
+    font-size: 11px;
+    padding: 5px 7px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .crop-thumb .crop-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crop-thumb input[type="checkbox"] { accent-color: var(--accent); flex-shrink: 0; }
 
   .preview-canvas {
     margin-top: 12px;
@@ -485,15 +524,21 @@
         <h2>1. 문제 이미지</h2>
         <div class="dropzone" id="dropzone">
           <div class="icon">📄</div>
-          <div class="main-text">이미지를 드래그하거나 탭하여 선택하세요</div>
-          <div class="sub-text">JPG · PNG · HEIC 지원</div>
+          <div class="main-text">이미지 또는 PDF를 드래그하거나 탭하여 선택하세요</div>
+          <div class="sub-text">JPG · PNG · HEIC · PDF 지원</div>
         </div>
         <div class="btn-row" style="margin-top:10px;">
-          <button class="btn btn-secondary" id="pickBtn">앨범에서 선택</button>
+          <button class="btn btn-secondary" id="pickBtn">앨범/파일에서 선택</button>
           <button class="btn btn-camera" id="cameraBtn" title="카메라로 촬영">📷</button>
         </div>
-        <input type="file" id="pickInput" accept="image/*">
+        <input type="file" id="pickInput" accept="image/*,application/pdf">
         <input type="file" id="cameraInput" accept="image/*" capture="environment">
+
+        <div class="pdf-nav" id="pdfNav" style="display:none;">
+          <button class="btn btn-camera" id="pdfPrevBtn">◀</button>
+          <span id="pdfPageIndicator">1 / 1</span>
+          <button class="btn btn-camera" id="pdfNextBtn">▶</button>
+        </div>
 
         <div class="preview-canvas" id="previewCanvas">
           <button class="remove-btn" id="removeImgBtn">✕</button>
@@ -501,6 +546,7 @@
         </div>
 
         <button class="btn btn-primary" id="convertBtn" disabled>AI 문제 분석 시작</button>
+        <button class="btn btn-secondary" id="cropBtn" disabled style="margin-top:10px;">✂️ 문제 자동 자르기</button>
 
         <div class="progress-wrap" id="progressWrap">
           <div class="progress-label">
@@ -508,6 +554,15 @@
             <span id="progressPercent">0%</span>
           </div>
           <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        </div>
+      </div>
+
+      <div class="card" id="cropResultsCard" style="display:none;">
+        <h2>잘라낸 문항 이미지</h2>
+        <div class="crop-grid" id="cropGrid"></div>
+        <div class="btn-row" style="margin-top:12px;">
+          <button class="btn btn-secondary" id="downloadZipBtn">ZIP 다운로드</button>
+          <button class="btn btn-secondary" id="downloadPptBtn">PPT 만들기</button>
         </div>
       </div>
     </div>
@@ -651,6 +706,15 @@
   const previewImg = document.getElementById('previewImg');
   const removeImgBtn = document.getElementById('removeImgBtn');
   const convertBtn = document.getElementById('convertBtn');
+  const cropBtn = document.getElementById('cropBtn');
+  const pdfNav = document.getElementById('pdfNav');
+  const pdfPrevBtn = document.getElementById('pdfPrevBtn');
+  const pdfNextBtn = document.getElementById('pdfNextBtn');
+  const pdfPageIndicator = document.getElementById('pdfPageIndicator');
+  const cropResultsCard = document.getElementById('cropResultsCard');
+  const cropGrid = document.getElementById('cropGrid');
+  const downloadZipBtn = document.getElementById('downloadZipBtn');
+  const downloadPptBtn = document.getElementById('downloadPptBtn');
 
   const progressWrap = document.getElementById('progressWrap');
   const progressText = document.getElementById('progressText');
@@ -745,21 +809,97 @@
   removeImgBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     selectedFile = null;
+    pdfDoc = null;
     previewCanvas.style.display = 'none';
+    pdfNav.style.display = 'none';
     convertBtn.disabled = true;
+    cropBtn.disabled = true;
+    cropResultsCard.style.display = 'none';
   });
+
+  function resetResultState() {
+    downloadBtn.disabled = true;
+    extractedQuestions = null;
+    resultCount.textContent = '';
+    previewArea.innerHTML = '<div class="card"><div class="empty-hint">이미지가 준비되었습니다. "AI 문제 분석 시작" 또는 "문제 자동 자르기"를 눌러주세요.</div></div>';
+    cropResultsCard.style.display = 'none';
+  }
 
   function handleFileSelect(file) {
     if (!file) return;
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+    if (isPdf) {
+      handlePdfSelect(file);
+      return;
+    }
+    pdfDoc = null;
+    pdfNav.style.display = 'none';
     selectedFile = file;
     previewImg.src = URL.createObjectURL(file);
     previewCanvas.style.display = 'block';
     convertBtn.disabled = false;
-    downloadBtn.disabled = true;
-    extractedQuestions = null;
-    resultCount.textContent = '';
-    previewArea.innerHTML = '<div class="card"><div class="empty-hint">이미지가 준비되었습니다. "AI 문제 분석 시작"을 눌러주세요.</div></div>';
+    cropBtn.disabled = false;
+    resetResultState();
   }
+
+  /* ---------- PDF 업로드 및 페이지 렌더링 ---------- */
+  let pdfDoc = null;
+  let pdfPageNum = 1;
+
+  function handlePdfSelect(file) {
+    if (!window.pdfjsLib) {
+      alert('PDF 라이브러리를 불러오지 못했습니다. 네트워크 연결을 확인하고 새로고침해주세요.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const typedArray = new Uint8Array(reader.result);
+      pdfjsLib.getDocument({ data: typedArray }).promise
+        .then((doc) => {
+          pdfDoc = doc;
+          pdfPageNum = 1;
+          pdfNav.style.display = doc.numPages > 1 ? 'flex' : 'none';
+          renderPdfPage();
+        })
+        .catch((err) => { alert('PDF를 여는 중 오류가 발생했습니다: ' + err.message); });
+    };
+    reader.onerror = () => alert('PDF 파일을 읽지 못했습니다.');
+    reader.readAsArrayBuffer(file);
+  }
+
+  function renderPdfPage() {
+    if (!pdfDoc) return;
+    pdfDoc.getPage(pdfPageNum).then((page) => {
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      page.render({ canvasContext: ctx, viewport: viewport }).promise.then(() => {
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          selectedFile = new File([blob], 'pdf-page-' + pdfPageNum + '.png', { type: 'image/png' });
+          previewImg.src = URL.createObjectURL(blob);
+          previewCanvas.style.display = 'block';
+          convertBtn.disabled = false;
+          cropBtn.disabled = false;
+          pdfPageIndicator.textContent = pdfPageNum + ' / ' + pdfDoc.numPages;
+          resetResultState();
+        }, 'image/png');
+      });
+    });
+  }
+
+  pdfPrevBtn.addEventListener('click', () => {
+    if (!pdfDoc || pdfPageNum <= 1) return;
+    pdfPageNum--;
+    renderPdfPage();
+  });
+  pdfNextBtn.addEventListener('click', () => {
+    if (!pdfDoc || pdfPageNum >= pdfDoc.numPages) return;
+    pdfPageNum++;
+    renderPdfPage();
+  });
 
   /* ---------- 진행률 표시 ---------- */
   function showProgress() {
@@ -1087,6 +1227,257 @@
       btn.textContent = originalLabel;
     }
   }
+
+  /* ---------- 문제 자동 자르기 (PDF Crop) ---------- */
+  const CROP_SCHEMA = {
+    type: 'ARRAY',
+    items: {
+      type: 'OBJECT',
+      properties: {
+        number: { type: 'STRING' },
+        x: { type: 'NUMBER' },
+        y: { type: 'NUMBER' },
+        width: { type: 'NUMBER' },
+        height: { type: 'NUMBER' }
+      },
+      required: ['x', 'y', 'width', 'height']
+    }
+  };
+
+  const CROP_TOOL_SCHEMA = {
+    name: 'detect_question_boxes',
+    description: '시험지 이미지에서 각 문항의 영역(상대좌표)을 반환한다.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        boxes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              number: { type: 'string' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              width: { type: 'number' },
+              height: { type: 'number' }
+            },
+            required: ['x', 'y', 'width', 'height']
+          }
+        }
+      },
+      required: ['boxes']
+    }
+  };
+
+  const CROP_PROMPT =
+    '첨부된 시험 문제지 이미지에서 각 문항의 전체 영역(문항 번호부터 그 문항의 선택지 끝까지)을 감지해줘.\n' +
+    '- 각 문항마다 이미지 전체 크기를 1로 봤을 때의 상대좌표로 x, y, width, height를 알려줘 (좌상단이 원점, 0~1 사이 소수).\n' +
+    '- x, y는 문항 블록의 좌상단 좌표, width, height는 그 블록의 가로/세로 비율이야.\n' +
+    '- 문항 번호도 함께 알려줘.\n' +
+    '- 반드시 주어진 JSON 스키마 형식으로만 응답해.';
+
+  async function callGeminiCrop(model, apiKey, mimeType, base64Data) {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+    const body = {
+      contents: [{ parts: [{ text: CROP_PROMPT }, { inline_data: { mime_type: mimeType, data: base64Data } }] }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: CROP_SCHEMA }
+    };
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+    const candidate = data && data.candidates && data.candidates[0];
+    const rawText = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
+    if (!rawText) throw new Error('AI 응답에서 결과를 찾을 수 없습니다.');
+    let parsed;
+    try { parsed = JSON.parse(rawText); } catch (e) { throw new Error('AI 응답을 JSON으로 해석하지 못했습니다.'); }
+    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('문항 영역을 찾지 못했습니다.');
+    return parsed;
+  }
+
+  async function callClaudeCrop(model, apiKey, mimeType, base64Data) {
+    const url = 'https://api.anthropic.com/v1/messages';
+    const body = {
+      model: model,
+      max_tokens: 4096,
+      tools: [CROP_TOOL_SCHEMA],
+      tool_choice: { type: 'tool', name: 'detect_question_boxes' },
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: CROP_PROMPT },
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Data } }
+        ]
+      }]
+    };
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+    const toolUse = Array.isArray(data.content) ? data.content.find((b) => b.type === 'tool_use' && b.name === 'detect_question_boxes') : null;
+    if (!toolUse || !toolUse.input || !Array.isArray(toolUse.input.boxes) || toolUse.input.boxes.length === 0) {
+      throw new Error('문항 영역을 찾지 못했습니다.');
+    }
+    return toolUse.input.boxes;
+  }
+
+  const CROP_PROVIDERS = {
+    gemini: { label: 'Gemini', getApiKey: PROVIDERS.gemini.getApiKey, getModel: PROVIDERS.gemini.getModel, fallbackModels: FALLBACK_MODELS, call: callGeminiCrop },
+    claude: { label: 'Claude', getApiKey: PROVIDERS.claude.getApiKey, getModel: PROVIDERS.claude.getModel, fallbackModels: CLAUDE_FALLBACK_MODELS, call: callClaudeCrop }
+  };
+
+  function cropImageByBoxes(file, boxes) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const results = boxes.map((b, idx) => {
+          const sx = Math.max(0, Math.min(img.naturalWidth, b.x * img.naturalWidth));
+          const sy = Math.max(0, Math.min(img.naturalHeight, b.y * img.naturalHeight));
+          const sw = Math.max(1, Math.min(img.naturalWidth - sx, b.width * img.naturalWidth));
+          const sh = Math.max(1, Math.min(img.naturalHeight - sy, b.height * img.naturalHeight));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(sw);
+          canvas.height = Math.round(sh);
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+          return { number: b.number || String(idx + 1), dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height };
+        });
+        resolve(results);
+      };
+      img.onerror = () => reject(new Error('이미지를 불러오지 못했습니다.'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  let croppedItems = [];
+  function renderCropGrid(items) {
+    croppedItems = items;
+    cropGrid.innerHTML = items.map((item, idx) =>
+      '<div class="crop-thumb">' +
+        '<img src="' + item.dataUrl + '" alt="문항 ' + escapeHtml(item.number || '') + '">' +
+        '<div class="crop-label"><span>' + escapeHtml(item.number || ('#' + (idx + 1))) + '</span>' +
+        '<input type="checkbox" data-idx="' + idx + '" checked></div>' +
+      '</div>'
+    ).join('');
+    cropResultsCard.style.display = 'block';
+  }
+  function getSelectedCropItems() {
+    return Array.from(cropGrid.querySelectorAll('input[type="checkbox"]:checked'))
+      .map((cb) => croppedItems[parseInt(cb.getAttribute('data-idx'), 10)])
+      .filter(Boolean);
+  }
+
+  cropBtn.addEventListener('click', async () => {
+    const provider = CROP_PROVIDERS[providerSelect.value] || CROP_PROVIDERS.gemini;
+    const apiKey = provider.getApiKey();
+    if (!apiKey) {
+      alert(provider.label + ' API Key를 입력해주세요. (우측 상단 "AI 설정")');
+      settingsModal.classList.add('open');
+      return;
+    }
+    if (!selectedFile) {
+      alert('먼저 이미지를 선택해주세요.');
+      return;
+    }
+
+    cropBtn.disabled = true;
+    convertBtn.disabled = true;
+    showProgress();
+    setProgress(10, '이미지 인코딩 중...');
+
+    try {
+      const base64Data = await fileToBase64(selectedFile);
+      const mimeType = selectedFile.type || 'image/jpeg';
+      setProgress(25, '요청 준비 중...');
+
+      const requestedModel = provider.getModel();
+      const candidates = [requestedModel].concat(provider.fallbackModels.filter((m) => m !== requestedModel));
+      let boxes = null;
+      let lastError = null;
+
+      for (const model of candidates) {
+        setProgress(35, model + ' 모델로 전송 중...');
+        startFakeProgress(40, 85, model + '가 문항 영역을 감지 중입니다...');
+        try {
+          boxes = await provider.call(model, apiKey, mimeType, base64Data);
+          stopFakeProgress();
+          setProgress(90, '이미지를 자르는 중...');
+          break;
+        } catch (err) {
+          stopFakeProgress();
+          lastError = err;
+          if (!isModelNotFoundError(err)) break;
+        }
+      }
+
+      if (!boxes) throw lastError || new Error('알 수 없는 오류가 발생했습니다.');
+
+      const items = await cropImageByBoxes(selectedFile, boxes);
+      renderCropGrid(items);
+      setProgress(100, '완료!');
+      progressWrap.classList.add('done');
+      setTimeout(hideProgress, 1200);
+    } catch (err) {
+      stopFakeProgress();
+      setProgressError('오류: ' + friendlyError(err));
+    } finally {
+      cropBtn.disabled = false;
+      convertBtn.disabled = false;
+    }
+  });
+
+  downloadZipBtn.addEventListener('click', async () => {
+    const selected = getSelectedCropItems();
+    if (selected.length === 0) { alert('선택된 문항이 없습니다.'); return; }
+    if (!window.JSZip) { alert('ZIP 라이브러리를 불러오지 못했습니다. 새로고침해주세요.'); return; }
+    try {
+      const zip = new JSZip();
+      selected.forEach((item, idx) => {
+        const base64 = item.dataUrl.split(',')[1];
+        zip.file('문항_' + (item.number || (idx + 1)) + '.png', base64, { base64: true });
+      });
+      const blob = await zip.generateAsync({ type: 'blob' });
+      saveAs(blob, 'AI_잘라낸문항.zip');
+    } catch (err) {
+      alert('ZIP 생성 중 오류가 발생했습니다: ' + err.message);
+    }
+  });
+
+  downloadPptBtn.addEventListener('click', async () => {
+    const selected = getSelectedCropItems();
+    if (selected.length === 0) { alert('선택된 문항이 없습니다.'); return; }
+    if (!window.PptxGenJS) { alert('PPT 라이브러리를 불러오지 못했습니다. 새로고침해주세요.'); return; }
+    try {
+      const pres = new PptxGenJS();
+      const maxW = 9, maxH = 4.8;
+      selected.forEach((item) => {
+        const slide = pres.addSlide();
+        const ratio = item.width / item.height;
+        let w = maxW, h = maxW / ratio;
+        if (h > maxH) { h = maxH; w = maxH * ratio; }
+        const x = (10 - w) / 2;
+        const y = 0.5 + (maxH - h) / 2;
+        slide.addText('문항 ' + (item.number || ''), { x: 0.3, y: 0.15, fontSize: 14, bold: true, color: '363636' });
+        slide.addImage({ data: item.dataUrl, x: x, y: y, w: w, h: h });
+      });
+      await pres.writeFile({ fileName: 'AI_문항_PPT.pptx' });
+    } catch (err) {
+      alert('PPT 생성 중 오류가 발생했습니다: ' + err.message);
+    }
+  });
 
   convertBtn.addEventListener('click', async () => {
     const provider = PROVIDERS[providerSelect.value] || PROVIDERS.gemini;
