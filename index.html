@@ -150,6 +150,9 @@
   <div class="card">
     <h2>Gemini API Key</h2>
     <input type="password" id="apiKeyInput" placeholder="Gemini API Key를 입력하세요" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <h2 style="margin-top:14px;">모델 (오류 발생 시 변경)</h2>
+    <input type="text" id="modelInput" placeholder="gemini-flash-latest" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <p style="font-size:12px;color:var(--sub);margin:6px 2px 0;">"models/xxx not found" 오류가 나면 이 칸에 gemini-2.5-flash 등 다른 모델명을 입력해보세요.</p>
   </div>
 
   <div class="card">
@@ -187,6 +190,7 @@
 <script>
 (function () {
   const apiKeyInput = document.getElementById('apiKeyInput');
+  const modelInput = document.getElementById('modelInput');
   const pickBtn = document.getElementById('pickBtn');
   const cameraBtn = document.getElementById('cameraBtn');
   const pickInput = document.getElementById('pickInput');
@@ -203,10 +207,19 @@
   let selectedFile = null;
   let extractedQuestions = null;
 
+  const DEFAULT_MODEL = 'gemini-flash-latest';
+  const FALLBACK_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'];
+
   const savedKey = localStorage.getItem('gemini_api_key');
   if (savedKey) apiKeyInput.value = savedKey;
   apiKeyInput.addEventListener('change', () => {
     localStorage.setItem('gemini_api_key', apiKeyInput.value.trim());
+  });
+
+  const savedModel = localStorage.getItem('gemini_model');
+  modelInput.value = savedModel || DEFAULT_MODEL;
+  modelInput.addEventListener('change', () => {
+    localStorage.setItem('gemini_model', modelInput.value.trim());
   });
 
   pickBtn.addEventListener('click', () => pickInput.click());
@@ -297,61 +310,97 @@
       const base64Data = await fileToBase64(selectedFile);
       const mimeType = selectedFile.type || 'image/jpeg';
 
-      const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + encodeURIComponent(apiKey);
-      const body = {
-        contents: [{
-          parts: [
-            { text: EXTRACT_PROMPT },
-            { inline_data: { mime_type: mimeType, data: base64Data } }
-          ]
-        }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: RESPONSE_SCHEMA
+      const requestedModel = modelInput.value.trim() || DEFAULT_MODEL;
+      const candidates = [requestedModel].concat(FALLBACK_MODELS.filter((m) => m !== requestedModel));
+
+      let parsed = null;
+      let workingModel = null;
+      let lastError = null;
+
+      for (const model of candidates) {
+        showStatus('AI 분석 중... (' + model + ')', false, true);
+        try {
+          parsed = await callGemini(model, apiKey, mimeType, base64Data);
+          workingModel = model;
+          break;
+        } catch (err) {
+          lastError = err;
+          if (!isModelNotFoundError(err)) break;
         }
-      };
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        const msg = (data && data.error && data.error.message) ? data.error.message : ('HTTP ' + res.status);
-        throw new Error(msg);
       }
 
-      const candidate = data && data.candidates && data.candidates[0];
-      const rawText = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
-      if (!rawText) {
-        throw new Error('AI 응답에서 결과를 찾을 수 없습니다.');
+      if (!parsed) {
+        throw lastError || new Error('알 수 없는 오류가 발생했습니다.');
       }
 
-      let parsed;
-      try {
-        parsed = JSON.parse(rawText);
-      } catch (e) {
-        throw new Error('AI 응답을 JSON으로 해석하지 못했습니다.');
-      }
-
-      if (!Array.isArray(parsed) || parsed.length === 0) {
-        throw new Error('추출된 문항이 없습니다. 다른 이미지로 다시 시도해주세요.');
+      if (workingModel !== requestedModel) {
+        modelInput.value = workingModel;
+        localStorage.setItem('gemini_model', workingModel);
       }
 
       extractedQuestions = parsed;
       renderPreview(parsed);
       downloadBtn.disabled = false;
-      showStatus('추출 완료 (' + parsed.length + '개 문항)', false, false);
-      setTimeout(hideStatus, 2500);
+      showStatus('추출 완료 (' + parsed.length + '개 문항, 모델: ' + workingModel + ')', false, false);
+      setTimeout(hideStatus, 3000);
     } catch (err) {
       showStatus('오류: ' + err.message, true, false);
     } finally {
       convertBtn.disabled = false;
     }
   });
+
+  function isModelNotFoundError(err) {
+    return err && typeof err.message === 'string' && /not found|is not supported for generateContent/i.test(err.message);
+  }
+
+  async function callGemini(model, apiKey, mimeType, base64Data) {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+    const body = {
+      contents: [{
+        parts: [
+          { text: EXTRACT_PROMPT },
+          { inline_data: { mime_type: mimeType, data: base64Data } }
+        ]
+      }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: RESPONSE_SCHEMA
+      }
+    };
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+
+    const candidate = data && data.candidates && data.candidates[0];
+    const rawText = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
+    if (!rawText) {
+      throw new Error('AI 응답에서 결과를 찾을 수 없습니다.');
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (e) {
+      throw new Error('AI 응답을 JSON으로 해석하지 못했습니다.');
+    }
+
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error('추출된 문항이 없습니다. 다른 이미지로 다시 시도해주세요.');
+    }
+
+    return parsed;
+  }
 
   function renderPreview(questions) {
     previewArea.innerHTML = '';
