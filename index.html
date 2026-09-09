@@ -526,7 +526,11 @@
   .print-hr { border-bottom: 2pt solid #000; margin-bottom: 8pt; }
   .print-note { font-size: 10.5pt; margin-bottom: 10pt; }
 
-  .print-columns { column-count: 2; column-gap: 26pt; column-rule: 1pt solid #ccc; }
+  /* Safari 인쇄 엔진은 CSS column-count의 break-inside:avoid를 안정적으로 지키지 않아
+     (문항 중간이 다음 단으로 쪼개짐), 대신 좌/우 컬럼을 JS로 직접 나눠 채운다. */
+  .print-columns { display: flex; gap: 26pt; align-items: flex-start; }
+  .print-col { flex: 1; min-width: 0; border-left: 1pt solid #ccc; padding-left: 26pt; }
+  .print-col:first-child { border-left: none; padding-left: 0; }
   .print-q { break-inside: avoid; margin-bottom: 14pt; }
   .print-q-number { font-weight: 700; font-size: 12pt; margin-bottom: 4pt; }
   .print-q-score { font-weight: 700; font-size: 10pt; margin-left: 6pt; }
@@ -666,7 +670,10 @@
     <div class="print-hr"></div>
     <div class="print-note" id="printNote"></div>
   </div>
-  <div class="print-columns" id="printColumns"></div>
+  <div class="print-columns" id="printColumns">
+    <div class="print-col" id="printColLeft"></div>
+    <div class="print-col" id="printColRight"></div>
+  </div>
 </div>
 
 <div class="modal-overlay" id="settingsModal">
@@ -1052,6 +1059,8 @@
     '- 각 문항의 번호(number), 지문(question), 보기 박스(box, 없으면 null), 5지선다 선택지(choices)를 구분해서 정리해.\n' +
     '- 문항 배점이 "[3점]"처럼 표시돼 있으면 score 필드에 "[3점]" 형태 그대로 담고, 없으면 score는 null로 해.\n' +
     '- 수식은 반드시 LaTeX 형식으로 작성하고 인라인 수식은 $...$ 로 감싸. 분수는 \\frac{}{}, 극한은 \\lim_{x \\to a} 형태로, 근호는 \\sqrt{}, 합/적분은 \\sum_{}^{}, \\int_{}^{} 형태로 정확히 표기해.\n' +
+    '- \\begin, \\end, \\frac, \\lim, \\sum, \\int 같은 LaTeX 명령어가 $ 기호 없이 텍스트에 그대로 노출되면 절대 안 돼. 예외 없이 전부 $...$ 또는 $$...$$ 로 감싸.\n' +
+    '- 구간별로 정의된 함수(case문)는 반드시 "$$f(x) = \\begin{cases} 식1 & 조건1 \\\\ 식2 & 조건2 \\end{cases}$$" 형태로, \\begin{cases}부터 \\end{cases}까지 전체를 $$...$$ 로 한 번에 감싸.\n' +
     '- 선택지는 "① ..." 형태처럼 원문자 기호를 유지한 문자열 배열로 만들어.\n' +
     '- 보기 박스(<보기> 등)가 있으면 box 필드에 텍스트를 담고, 없으면 box는 null로 해.\n' +
     '- 반드시 주어진 JSON 스키마 형식으로만 응답해.';
@@ -1195,7 +1204,7 @@
     return '다음은 원본 시험 문제야. 이 문제와 출제 의도·유형·난이도는 동일하게 유지하되, ' +
       '수치나 지문 소재를 바꾼 유사(변형) 문제를 하나 만들어줘.\n' +
       '- 반드시 정답(answer)과 단계별 풀이(explanation)를 함께 제공해.\n' +
-      '- 수식은 LaTeX로 작성하고 인라인 수식은 $...$ 로 감싸.\n' +
+      '- 수식은 LaTeX로 작성하고 인라인 수식은 $...$, 구간별 함수(case문) 등은 $$...$$ 로 반드시 감싸. \\begin, \\frac, \\lim 같은 명령어가 $ 없이 노출되면 안 돼.\n' +
       '- 선택지가 있는 문제라면 choices도 "① ..." 형식으로 새로 만들어.\n' +
       '- 원본 문제: ' + JSON.stringify({ number: original.number, question: original.question, box: original.box, choices: original.choices, score: original.score }) + '\n' +
       '반드시 주어진 JSON 스키마 형식으로만 응답해.';
@@ -2181,6 +2190,33 @@
     return html;
   }
 
+  /* 문항 하나가 다단 중간에 쪼개지지 않도록, CSS column-count 대신
+     좌/우 컨테이너에 JS로 직접 나눠 담는다 (길이 기준으로 대략 균형). */
+  function estimateQuestionWeight(q) {
+    let w = 60 + String(q.question || '').length;
+    if (q.box) w += String(q.box).length;
+    if (Array.isArray(q.choices)) w += q.choices.reduce((sum, c) => sum + String(c).length, 0);
+    return w;
+  }
+
+  function splitQuestionsIntoColumns(questions) {
+    const weights = questions.map(estimateQuestionWeight);
+    const total = weights.reduce((a, b) => a + b, 0);
+    const half = total / 2;
+    let acc = 0;
+    const left = [];
+    const right = [];
+    questions.forEach((q, i) => {
+      if (left.length === 0 || acc < half) {
+        left.push(q);
+        acc += weights[i];
+      } else {
+        right.push(q);
+      }
+    });
+    return { left: left, right: right };
+  }
+
   function buildPrintView(questions, examInfo) {
     document.getElementById('printTitle').textContent = examInfo.title || '';
     document.getElementById('printSubject').textContent = examInfo.subject || '';
@@ -2192,7 +2228,21 @@
       periodEl.style.display = 'none';
     }
     document.getElementById('printNote').textContent = examInfo.note || '';
-    document.getElementById('printColumns').innerHTML = questions.map(buildPrintQuestionHtml).join('');
+    const cols = splitQuestionsIntoColumns(questions);
+    document.getElementById('printColLeft').innerHTML = cols.left.map(buildPrintQuestionHtml).join('');
+    document.getElementById('printColRight').innerHTML = cols.right.map(buildPrintQuestionHtml).join('');
+  }
+
+  /* 인쇄 시점에 웹폰트가 아직 안 불러와진 상태로 찍히는 걸 방지 */
+  function ensureFontsReady() {
+    if (document.fonts && document.fonts.load) {
+      return Promise.all([
+        document.fonts.load('16px "Noto Serif KR"'),
+        document.fonts.load('700 16px "Noto Serif KR"'),
+        document.fonts.load('900 16px "Noto Serif KR"')
+      ]).then(() => document.fonts.ready).catch(() => Promise.resolve());
+    }
+    return Promise.resolve();
   }
 
   printBtn.addEventListener('click', () => {
@@ -2208,10 +2258,19 @@
     };
     buildPrintView(extractedQuestions, examInfo);
     const printRoot = document.getElementById('printRoot');
-    const typesetPromise = (window.MathJax && window.MathJax.typesetPromise)
-      ? window.MathJax.typesetPromise([printRoot])
-      : Promise.resolve();
-    typesetPromise.then(() => window.print()).catch(() => window.print());
+    printBtn.disabled = true;
+    const originalLabel = printBtn.textContent;
+    printBtn.textContent = '인쇄 준비 중...';
+    Promise.all([
+      ensureFontsReady(),
+      (window.MathJax && window.MathJax.typesetPromise) ? window.MathJax.typesetPromise([printRoot]) : Promise.resolve()
+    ])
+      .catch(() => {})
+      .then(() => {
+        printBtn.disabled = false;
+        printBtn.textContent = originalLabel;
+        window.print();
+      });
   });
 
   /* ---------- 문제은행 (Firebase) ---------- */
