@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>My Test Paper AI Converter</title>
 
-<script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+<script src="https://unpkg.com/docx@9.7.1/build/index.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-auth-compat.js"></script>
@@ -1274,9 +1274,50 @@
     saveBankBtn.disabled = !connected || !extractedQuestions || extractedQuestions.length === 0;
   }
 
+  /* Firebase 콘솔의 SDK 스니펫을 통째로 붙여넣어도 되도록, "apiKey"가 포함된 중괄호 블록을
+     찾아 JS 객체 리터럴(따옴표 없는 key 포함)로 안전하게 평가한다.
+     (import { initializeApp } ... 같은 앞부분 중괄호에 낚이지 않도록 apiKey 위치부터 역탐색) */
+  function extractFirebaseConfig(raw) {
+    const text = String(raw || '').trim();
+    const keyIdx = text.indexOf('apiKey');
+    if (keyIdx === -1) throw new Error('붙여넣은 텍스트에서 apiKey를 찾을 수 없습니다.');
+    let startIdx = -1;
+    let backDepth = 0;
+    for (let idx = keyIdx; idx >= 0; idx--) {
+      if (text[idx] === '}') backDepth++;
+      else if (text[idx] === '{') {
+        if (backDepth === 0) { startIdx = idx; break; }
+        backDepth--;
+      }
+    }
+    if (startIdx === -1) throw new Error('Firebase config 객체의 여는 중괄호를 찾지 못했습니다.');
+    let depth = 0;
+    let endIdx = -1;
+    for (let idx = startIdx; idx < text.length; idx++) {
+      if (text[idx] === '{') depth++;
+      else if (text[idx] === '}') {
+        depth--;
+        if (depth === 0) { endIdx = idx; break; }
+      }
+    }
+    if (endIdx === -1) throw new Error('Firebase config 객체의 닫는 중괄호를 찾지 못했습니다.');
+    const objectLiteral = text.slice(startIdx, endIdx + 1);
+    let config;
+    try {
+      // eslint-disable-next-line no-new-func
+      config = new Function('"use strict"; return (' + objectLiteral + ');')();
+    } catch (e) {
+      throw new Error('Firebase config 형식을 해석하지 못했습니다: ' + e.message);
+    }
+    if (!config || typeof config !== 'object' || !config.apiKey || !config.projectId) {
+      throw new Error('apiKey/projectId가 포함된 Firebase config가 아닙니다.');
+    }
+    return config;
+  }
+
   function initFirebase(configStr) {
     try {
-      const config = JSON.parse(configStr);
+      const config = extractFirebaseConfig(configStr);
       if (window.firebase && firebase.apps && firebase.apps.length) {
         firebase.apps.slice().forEach((a) => a.delete());
       }
