@@ -364,7 +364,7 @@
     <label>API Key</label>
     <input type="password" id="apiKeyInput" placeholder="Gemini API Key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <label>모델 (오류 발생 시 변경)</label>
-    <input type="text" id="modelInput" placeholder="gemini-3.6-flash" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <input type="text" id="modelInput" placeholder="gemini-flash-lite-latest" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <div class="usage-line" id="modalUsageLine">오늘 분석 0회</div>
     <div class="modal-actions">
       <button class="btn modal-close" id="closeModalBtn">닫기</button>
@@ -411,8 +411,8 @@
   let extractedQuestions = null;
   let fakeProgressTimer = null;
 
-  const DEFAULT_MODEL = 'gemini-3.6-flash';
-  const FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'];
+  const DEFAULT_MODEL = 'gemini-flash-lite-latest';
+  const FALLBACK_MODELS = ['gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'];
 
   /* ---------- 설정(API Key / 모델) ---------- */
   apiKeyInput.value = localStorage.getItem('gemini_api_key') || '';
