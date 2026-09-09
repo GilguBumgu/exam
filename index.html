@@ -245,6 +245,19 @@
 
   .empty-hint { color: var(--sub); font-size: 13px; text-align: center; padding: 26px 10px; }
 
+  .field-label { font-size: 11px; color: var(--sub); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; display: block; margin-bottom: 4px; }
+  .field-input {
+    width: 100%;
+    padding: 11px 13px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 15px;
+    background: #fafafa;
+    margin-bottom: 12px;
+  }
+  .field-input:last-child { margin-bottom: 0; }
+  .q-score { font-weight: 700; color: var(--accent-dark); font-size: 13px; margin-left: 6px; }
+
   .modal-overlay {
     display: none;
     position: fixed;
@@ -292,6 +305,16 @@
 <main>
   <div class="workspace">
     <div class="panel">
+      <div class="card">
+        <h2>시험지 정보</h2>
+        <label class="field-label">제목</label>
+        <input type="text" class="field-input" id="examTitleInput" placeholder="예: 2025학년도 1학기 중간고사">
+        <label class="field-label">과목 / 시간</label>
+        <input type="text" class="field-input" id="examSubjectInput" placeholder="예: 수학 · 50분">
+        <label class="field-label">안내문 (선택)</label>
+        <input type="text" class="field-input" id="examNoteInput" placeholder="예: 성명: ________  수험번호: ________">
+      </div>
+
       <div class="card">
         <h2>1. 문제 이미지</h2>
         <div class="dropzone" id="dropzone">
@@ -361,6 +384,10 @@
   const usagePill = document.getElementById('usagePill');
   const modalUsageLine = document.getElementById('modalUsageLine');
 
+  const examTitleInput = document.getElementById('examTitleInput');
+  const examSubjectInput = document.getElementById('examSubjectInput');
+  const examNoteInput = document.getElementById('examNoteInput');
+
   const dropzone = document.getElementById('dropzone');
   const pickBtn = document.getElementById('pickBtn');
   const cameraBtn = document.getElementById('cameraBtn');
@@ -390,6 +417,18 @@
   /* ---------- 설정(API Key / 모델) ---------- */
   apiKeyInput.value = localStorage.getItem('gemini_api_key') || '';
   modelInput.value = localStorage.getItem('gemini_model') || DEFAULT_MODEL;
+
+  /* ---------- 시험지 정보(제목 블록) ---------- */
+  examTitleInput.value = localStorage.getItem('exam_title') || '';
+  examSubjectInput.value = localStorage.getItem('exam_subject') || '';
+  examNoteInput.value = localStorage.getItem('exam_note') || '';
+  [examTitleInput, examSubjectInput, examNoteInput].forEach((el) => {
+    el.addEventListener('change', () => {
+      localStorage.setItem('exam_title', examTitleInput.value.trim());
+      localStorage.setItem('exam_subject', examSubjectInput.value.trim());
+      localStorage.setItem('exam_note', examNoteInput.value.trim());
+    });
+  });
 
   settingsBtn.addEventListener('click', () => { settingsModal.classList.add('open'); });
   closeModalBtn.addEventListener('click', () => { settingsModal.classList.remove('open'); });
@@ -514,7 +553,8 @@
         number: { type: 'STRING' },
         question: { type: 'STRING' },
         box: { type: 'STRING', nullable: true },
-        choices: { type: 'ARRAY', items: { type: 'STRING' } }
+        choices: { type: 'ARRAY', items: { type: 'STRING' } },
+        score: { type: 'STRING', nullable: true }
       },
       required: ['number', 'question', 'choices']
     }
@@ -523,7 +563,8 @@
   const EXTRACT_PROMPT =
     '첨부된 시험 문제지 이미지를 분석해서 이미지에 있는 모든 문항을 정확하게 추출해줘.\n' +
     '- 각 문항의 번호(number), 지문(question), 보기 박스(box, 없으면 null), 5지선다 선택지(choices)를 구분해서 정리해.\n' +
-    '- 수식은 반드시 LaTeX 형식으로 작성하고 인라인 수식은 $...$ 로 감싸.\n' +
+    '- 문항 배점이 "[3점]"처럼 표시돼 있으면 score 필드에 "[3점]" 형태 그대로 담고, 없으면 score는 null로 해.\n' +
+    '- 수식은 반드시 LaTeX 형식으로 작성하고 인라인 수식은 $...$ 로 감싸. 분수는 \\frac{}{}, 극한은 \\lim_{x \\to a} 형태로, 근호는 \\sqrt{}, 합/적분은 \\sum_{}^{}, \\int_{}^{} 형태로 정확히 표기해.\n' +
     '- 선택지는 "① ..." 형태처럼 원문자 기호를 유지한 문자열 배열로 만들어.\n' +
     '- 보기 박스(<보기> 등)가 있으면 box 필드에 텍스트를 담고, 없으면 box는 null로 해.\n' +
     '- 반드시 주어진 JSON 스키마 형식으로만 응답해.';
@@ -618,7 +659,7 @@
 
       const numberEl = document.createElement('div');
       numberEl.className = 'q-number';
-      numberEl.innerHTML = escapeHtml(q.number || '');
+      numberEl.innerHTML = escapeHtml(q.number || '') + (q.score ? '<span class="q-score">' + escapeHtml(q.score) + '</span>' : '');
       card.appendChild(numberEl);
 
       const textEl = document.createElement('div');
@@ -657,24 +698,200 @@
   const FONT_BODY = '신명 중명조';
   const FONT_CHOICE = '한양 신명조';
   const FONT_MATH = 'HyhwpEQ';
-  const MATH_OR_DIGIT_RE = /\$([^$]+)\$|(\d+(?:\.\d+)?)/g;
 
-  function buildRuns(text, font, size, bold) {
+  /* LaTeX($...$) -> 실제 Word 수식 개체(OMML) 변환기 (수능 수학에서 흔한 표기 위주 지원) */
+  const GREEK_MAP = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε', zeta: 'ζ', eta: 'η',
+    theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ',
+    pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π', Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω'
+  };
+  const SYMBOL_MAP = {
+    times: '×', div: '÷', cdot: '·', pm: '±', mp: '∓', leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠',
+    infty: '∞', in: '∈', notin: '∉', cup: '∪', cap: '∩', subset: '⊂', subseteq: '⊆', supset: '⊃', supseteq: '⊇',
+    emptyset: '∅', varnothing: '∅', forall: '∀', exists: '∃', partial: '∂', nabla: '∇',
+    cdots: '⋯', ldots: '…', vdots: '⋮', ddots: '⋱', angle: '∠', triangle: '△', perp: '⊥', parallel: '∥',
+    approx: '≈', equiv: '≡', sim: '∼', simeq: '≃', cong: '≅', propto: '∝', circ: '∘', bullet: '•',
+    wedge: '∧', vee: '∨', neg: '¬', oplus: '⊕', otimes: '⊗', degree: '°', prime: '′', therefore: '∴', because: '∵',
+    to: '→', rightarrow: '→', longrightarrow: '→', Rightarrow: '⇒', leftarrow: '←', leftrightarrow: '↔',
+    '{': '{', '}': '}', ',': ' ', ';': ' ', '%': '%', '#': '#'
+  };
+  const FUNCTION_NAMES = ['sin', 'cos', 'tan', 'csc', 'sec', 'cot', 'log', 'ln', 'exp', 'arcsin', 'arccos', 'arctan'];
+
+  function parseLatexToMath(latex, M) {
+    const s = latex;
+    let i = 0;
+    const eof = () => i >= s.length;
+    const skipSpaces = () => { while (!eof() && /\s/.test(s[i])) i++; };
+
+    function readCommandName() {
+      i++; // skip backslash
+      if (eof()) return '';
+      if (/[a-zA-Z]/.test(s[i])) {
+        const start = i;
+        while (!eof() && /[a-zA-Z]/.test(s[i])) i++;
+        return s.slice(start, i);
+      }
+      const ch = s[i]; i++; return ch;
+    }
+
+    function parseGroup() {
+      if (s[i] !== '{') return parseAtomWithScripts();
+      i++;
+      const comps = [];
+      while (!eof() && s[i] !== '}') comps.push(...parseAtomWithScripts());
+      if (s[i] === '}') i++;
+      return comps;
+    }
+
+    function parseOptionalBracketGroup() {
+      if (s[i] === '[') {
+        i++;
+        const start = i;
+        while (!eof() && s[i] !== ']') i++;
+        const inner = s.slice(start, i);
+        if (s[i] === ']') i++;
+        return parseLatexToMath(inner, M);
+      }
+      return null;
+    }
+
+    function parseBaseAtom() {
+      skipSpaces();
+      if (eof()) return [];
+      const ch = s[i];
+      if (ch === '{') return parseGroup();
+      if (ch === '\\') return parseCommand(readCommandName());
+      if (/[0-9]/.test(ch)) {
+        const start = i;
+        while (!eof() && /[0-9.]/.test(s[i])) i++;
+        return [new M.MathRun(s.slice(start, i))];
+      }
+      i++;
+      return [new M.MathRun(ch)];
+    }
+
+    /* 함수 인자: "(" 로 시작하면 괄호 짝이 맞을 때까지 통째로 읽어 sin(x+1) 같은 표현을 온전히 포착 */
+    function parseFunctionArgument() {
+      skipSpaces();
+      if (s[i] !== '(') return parseBaseAtom();
+      const comps = [];
+      let depth = 0;
+      while (!eof()) {
+        if (s[i] === '(') depth++;
+        else if (s[i] === ')') depth--;
+        const wasClosing = s[i] === ')' && depth === 0;
+        comps.push(...parseAtomWithScripts());
+        if (wasClosing || eof()) break;
+      }
+      return comps;
+    }
+
+    function parseCommand(name) {
+      switch (name) {
+        case 'frac': {
+          const num = parseGroup();
+          const den = parseGroup();
+          return [new M.MathFraction({ numerator: num, denominator: den })];
+        }
+        case 'sqrt': {
+          const deg = parseOptionalBracketGroup();
+          const rad = parseGroup();
+          return [new M.MathRadical(deg ? { children: rad, degree: deg } : { children: rad })];
+        }
+        case 'sum':
+        case 'int': {
+          skipSpaces();
+          let sub = null, sup = null;
+          while (s[i] === '_' || s[i] === '^') {
+            if (s[i] === '_') { i++; sub = parseGroup(); } else { i++; sup = parseGroup(); }
+            skipSpaces();
+          }
+          const summand = parseAtomWithScripts();
+          const opts = { children: summand.length ? summand : [new M.MathRun('')] };
+          if (sub) opts.subScript = sub;
+          if (sup) opts.superScript = sup;
+          return [new (name === 'sum' ? M.MathSum : M.MathIntegral)(opts)];
+        }
+        case 'lim': {
+          skipSpaces();
+          let limitComps = [new M.MathRun('')];
+          if (s[i] === '_') { i++; limitComps = parseGroup(); }
+          return [new M.MathLimitLower({ children: [new M.MathRun('lim')], limit: limitComps })];
+        }
+        case 'left':
+        case 'right':
+          return [];
+        case 'text': {
+          const inner = parseGroup();
+          return inner;
+        }
+        default: {
+          if (FUNCTION_NAMES.indexOf(name) !== -1) {
+            skipSpaces();
+            let nameComp = [new M.MathRun(name)];
+            if (s[i] === '_') { i++; const sub = parseGroup(); nameComp = [new M.MathSubScript({ children: [new M.MathRun(name)], subScript: sub })]; }
+            skipSpaces();
+            const arg = parseFunctionArgument();
+            return [new M.MathFunction({ name: nameComp, children: arg.length ? arg : [new M.MathRun('')] })];
+          }
+          if (GREEK_MAP[name]) return [new M.MathRun(GREEK_MAP[name])];
+          if (SYMBOL_MAP[name]) return [new M.MathRun(SYMBOL_MAP[name])];
+          return [new M.MathRun(name)];
+        }
+      }
+    }
+
+    function parseAtomWithScripts() {
+      const atom = parseBaseAtom();
+      skipSpaces();
+      let supComps = null, subComps = null;
+      while (!eof() && (s[i] === '^' || s[i] === '_')) {
+        if (s[i] === '^') { i++; supComps = parseGroup(); } else { i++; subComps = parseGroup(); }
+        skipSpaces();
+      }
+      if (supComps && subComps) return [new M.MathSubSuperScript({ children: atom, superScript: supComps, subScript: subComps })];
+      if (supComps) return [new M.MathSuperScript({ children: atom, superScript: supComps })];
+      if (subComps) return [new M.MathSubScript({ children: atom, subScript: subComps })];
+      return atom;
+    }
+
+    const result = [];
+    while (!eof()) result.push(...parseAtomWithScripts());
+    return result;
+  }
+
+  function getMathClasses() {
+    const d = window.docx;
+    return {
+      DocxMath: d.Math, MathRun: d.MathRun, MathFraction: d.MathFraction, MathRadical: d.MathRadical,
+      MathSum: d.MathSum, MathIntegral: d.MathIntegral, MathSuperScript: d.MathSuperScript, MathSubScript: d.MathSubScript,
+      MathSubSuperScript: d.MathSubSuperScript, MathFunction: d.MathFunction, MathLimitLower: d.MathLimitLower
+    };
+  }
+
+  /* 문항 텍스트 -> [TextRun | Math] 배열: $..$ 는 실제 수식 개체, 일반 숫자는 수식 폰트 텍스트 */
+  function buildParagraphChildren(text, font, size, bold) {
     const { TextRun } = window.docx;
+    const M = getMathClasses();
     const runs = [];
     const str = text === null || text === undefined ? '' : String(text);
     if (!str) return [new TextRun({ text: '', font, size, bold: !!bold })];
 
+    const re = /\$([^$]+)\$|(\d+(?:\.\d+)?)/g;
     let lastIndex = 0;
     let match;
-    MATH_OR_DIGIT_RE.lastIndex = 0;
-    while ((match = MATH_OR_DIGIT_RE.exec(str)) !== null) {
+    while ((match = re.exec(str)) !== null) {
       if (match.index > lastIndex) {
         runs.push(new TextRun({ text: str.slice(lastIndex, match.index), font, size, bold: !!bold }));
       }
-      const mathText = match[1] !== undefined ? match[1] : match[2];
-      runs.push(new TextRun({ text: mathText, font: FONT_MATH, size, bold: !!bold }));
-      lastIndex = MATH_OR_DIGIT_RE.lastIndex;
+      if (match[1] !== undefined) {
+        const mathComponents = parseLatexToMath(match[1].trim(), M);
+        runs.push(new M.DocxMath({ children: mathComponents.length ? mathComponents : [new M.MathRun('')] }));
+      } else {
+        runs.push(new TextRun({ text: match[2], font: FONT_MATH, size, bold: !!bold }));
+      }
+      lastIndex = re.lastIndex;
     }
     if (lastIndex < str.length) {
       runs.push(new TextRun({ text: str.slice(lastIndex), font, size, bold: !!bold }));
@@ -682,17 +899,55 @@
     return runs;
   }
 
-  function buildDocx(questions) {
-    const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType } = window.docx;
-    const children = [];
+  function buildDocx(questions, examInfo) {
+    const {
+      Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType,
+      SectionType, AlignmentType, TabStopType
+    } = window.docx;
+
+    const PAGE_MARGIN = { top: 1000, bottom: 1000, left: 1000, right: 1000 };
+    const COLUMN_GAP = 567; // twips (~1cm)
+    const COLUMN_WIDTH = Math.round((11906 - PAGE_MARGIN.left - PAGE_MARGIN.right - COLUMN_GAP) / 2);
+
+    const titleChildren = [];
+    if (examInfo.title) {
+      titleChildren.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 60 },
+        children: [new TextRun({ text: examInfo.title, bold: true, size: 40, font: FONT_NUMBER })]
+      }));
+    }
+    if (examInfo.subject) {
+      titleChildren.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 120 },
+        children: [new TextRun({ text: examInfo.subject, bold: false, size: 24, font: FONT_BODY })]
+      }));
+    }
+    if (examInfo.note) {
+      titleChildren.push(new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        spacing: { after: 60 },
+        children: [new TextRun({ text: examInfo.note, size: 20, font: FONT_BODY })]
+      }));
+    }
+    titleChildren.push(new Paragraph({
+      border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 4 } },
+      spacing: { after: 200 },
+      children: []
+    }));
+
+    const questionChildren = [];
 
     questions.forEach((q) => {
-      const numberRuns = [new TextRun({ text: (q.number ? String(q.number) + '. ' : ''), font: FONT_NUMBER, size: 26, bold: true })];
-      const questionRuns = buildRuns(q.question, FONT_BODY, 22, false);
+      const numberText = q.number ? String(q.number) + '. ' : '';
+      const numberRuns = [new TextRun({ text: numberText, font: FONT_NUMBER, size: 26, bold: true })];
+      const questionRuns = buildParagraphChildren(q.question, FONT_BODY, 22, false);
+      const scoreRuns = q.score ? [new TextRun({ text: '  ' + String(q.score), font: FONT_BODY, size: 20, bold: true })] : [];
 
-      children.push(new Paragraph({
+      questionChildren.push(new Paragraph({
         spacing: { before: 240, after: 80 },
-        children: numberRuns.concat(questionRuns)
+        children: numberRuns.concat(questionRuns, scoreRuns)
       }));
 
       if (q.box) {
@@ -710,26 +965,56 @@
                     right: { style: BorderStyle.SINGLE, size: 4, color: '999999' }
                   },
                   margins: { top: 100, bottom: 100, left: 120, right: 120 },
-                  children: [new Paragraph({ children: buildRuns(q.box, FONT_BODY, 22, false) })]
+                  children: [new Paragraph({ children: buildParagraphChildren(q.box, FONT_BODY, 22, false) })]
                 })
               ]
             })
           ]
         });
-        children.push(boxTable);
-        children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+        questionChildren.push(boxTable);
+        questionChildren.push(new Paragraph({ text: '', spacing: { after: 80 } }));
       }
 
       if (Array.isArray(q.choices) && q.choices.length > 0) {
-        q.choices.forEach((c) => {
-          children.push(new Paragraph({ spacing: { after: 40 }, children: buildRuns(c, FONT_CHOICE, 22, false) }));
-        });
+        const totalLen = q.choices.reduce((sum, c) => sum + String(c).length, 0);
+        const shortEnough = q.choices.length <= 5 && totalLen <= 40 && !q.choices.some((c) => /\$/.test(c));
+
+        if (shortEnough) {
+          const segment = Math.floor(COLUMN_WIDTH / q.choices.length);
+          const tabStops = q.choices.map((_, idx) => ({ type: TabStopType.LEFT, position: segment * idx }));
+          const rowChildren = [];
+          q.choices.forEach((c, idx) => {
+            if (idx > 0) rowChildren.push(new TextRun({ text: '\t' }));
+            rowChildren.push(...buildParagraphChildren(c, FONT_CHOICE, 22, false));
+          });
+          questionChildren.push(new Paragraph({ tabStops, spacing: { after: 40 }, children: rowChildren }));
+        } else {
+          q.choices.forEach((c) => {
+            questionChildren.push(new Paragraph({ spacing: { after: 40 }, children: buildParagraphChildren(c, FONT_CHOICE, 22, false) }));
+          });
+        }
       }
 
-      children.push(new Paragraph({ text: '', spacing: { after: 160 } }));
+      questionChildren.push(new Paragraph({ text: '', spacing: { after: 160 } }));
     });
 
-    const doc = new Document({ sections: [{ properties: {}, children }] });
+    const doc = new Document({
+      sections: [
+        {
+          properties: { page: { size: { width: 11906, height: 16838 }, margin: PAGE_MARGIN } },
+          children: titleChildren
+        },
+        {
+          properties: {
+            page: { size: { width: 11906, height: 16838 }, margin: PAGE_MARGIN },
+            type: SectionType.CONTINUOUS,
+            column: { count: 2, space: COLUMN_GAP }
+          },
+          children: questionChildren
+        }
+      ]
+    });
+
     return Packer.toBlob(doc);
   }
 
@@ -740,7 +1025,12 @@
     }
     downloadBtn.disabled = true;
     try {
-      const blob = await buildDocx(extractedQuestions);
+      const examInfo = {
+        title: examTitleInput.value.trim(),
+        subject: examSubjectInput.value.trim(),
+        note: examNoteInput.value.trim()
+      };
+      const blob = await buildDocx(extractedQuestions, examInfo);
       saveAs(blob, 'AI_시험지_문항.docx');
     } catch (err) {
       alert('워드 파일 생성 중 오류가 발생했습니다: ' + err.message);
