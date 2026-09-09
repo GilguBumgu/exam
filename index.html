@@ -1595,11 +1595,15 @@
     }
   }
 
-  /* ---------- Word(.docx) 생성 ---------- */
-  const FONT_NUMBER = '한양 견명조';
-  const FONT_BODY = '신명 중명조';
-  const FONT_CHOICE = '한양 신명조';
-  const FONT_MATH = 'HyhwpEQ';
+  /* ---------- Word(.docx) 생성 ----------
+     한양 견명조/신명 중명조/한양 신명조/HyhwpEQ는 한컴오피스 전용 상용 폰트라
+     설치되어 있지 않은 기기(대부분의 아이패드/PC)에서는 워드가 자동으로 기본 폰트로
+     대체해버려 실제로는 반영된 것처럼 보이지 않는다. 그래서 Windows/Mac/iPad의
+     MS Word·한글에 기본 내장되어 있는 폰트로 대체해 실제로 눈에 보이게 한다. */
+  const FONT_NUMBER = '바탕체';
+  const FONT_BODY = '바탕체';
+  const FONT_CHOICE = '바탕체';
+  const FONT_MATH = 'Cambria Math';
 
   /* LaTeX($...$) -> 실제 Word 수식 개체(OMML) 변환기 (수능 수학에서 흔한 표기 위주 지원) */
   const GREEK_MAP = {
